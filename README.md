@@ -127,39 +127,57 @@ brain-tumor-segmentation-unet-app/
 
 
 brain-tumor-segmentation-unet-app/
-│
-├── src/
-│   ├── datos.py                   # Importación de datos desde Kaggle
-│   ├── mapeo_archivos.py          # Generación del catálogo de trabajo
-│   └── transformar_datos.py       # Adaptación y preprocesamiento de imágenes
-│
-├── Analisis/
-│   ├── Analisis_imagen.py         # Mini-modelo para predicción de urgencia
-│   ├── Analisis_test.py           # Análisis del conjunto de test
-│   ├── Metricas_modelo.py         # Métricas de calidad de segmentación
-│   └── Script_R_1.R               # Análisis estadístico en R
-│
-├── Aplicacion/
-│   ├── streamlit.py               # Página principal de la app
-│   ├── cliente.py                 # Comunicación con Dagster
-│   └── pages/
-│       └── Ficha_tecnica.py       # Ficha técnica del modelo
-│
-├── orquestador/
-│   └── activos.py                 # Activos de Dagster para el flujo de trabajo
-│
-├── procesamiento_datos/
-│   ├── procesador_dask.py         # Transformación paralela con Dask
-│   └── modelo/
-│       ├── modelo_unet.py         # Arquitectura UNet
-│       ├── entrenar_modelo.py     # Entrenamiento del modelo
-│       ├── segmentar.py           # Lógica de segmentación
-│       └── caracteristicas.py     # Extracción de características tumorales
-│
-├── .gitignore
-├── pyproject.toml
-├── uv.lock
-└── README.md
+src/
+  datos.py      # Importación de datos desde Kaggle
+  mapeo_archivos.py      # Generación del catálogo de trabajo
+  transformar_datos.py      # Adaptación y preprocesamiento de imágenes
+  Analisis/
+    Analisis_imagen.py       # Mini-modelo para predicción de urgencia
+    Analisis_test.py       # Análisis del conjunto de test
+    Metricas_modelo.py       # Métricas de calidad de segmentación
+    Script_R_1.R       # Análisis estadístico en R
+  Aplicacion/
+    streamlit.py       # Página principal de la app
+    cliente.py      # Comunicación con Dagster
+    pages/
+      Ficha_tecnica.py      # Ficha técnica del modelo
+  orquestador/
+    activos.py      # Activos de Dagster para el flujo de trabajo
+  procesamiento_datos/
+    procesador_dask.py      # Transformación paralela con Dask
+    modelo/
+      modelo_unet.py      # Arquitectura UNet
+      entrenar_modelo.py      # Entrenamiento del modelo
+      segmentar.py      # Lógica de segmentación
+      caracteristicas.py      # Extracción de características tumorales
+.gitignore
+pyproject.toml
+uv.lock
+README.md
+
+
+## Entrenamiento del Modelo
+
+Para entrenar el modelo, se utiliza Dagster como orquestador. Debes ejecutar los activos en el siguiente orden:
+
+1. Catalogo_maestro
+2. imagenes_procesadas
+3. dividir_dataset_balanceado
+4. modelo_unet_entrenado
+5. mejor_umbral
+6. segmentaciones_test
+7. caracteristicas_tumorales
+8. analisis_datos
+9. calidad_modelo_segmentacion
+10. entrenar_modelo_urgencia
+
+### Ejecución con Dagster
+
+```bash
+dagster dev
+
+Luego accede a la interfaz web de Dagster (http://localhost:3000) y materializa los activos en el orden indicado.
+
 
 ## Uso de la Aplicación
 
@@ -173,33 +191,10 @@ Flujo de uso:
 
 
 1. Rellenar y subir formulario clínico
-2. 2. Subir imagen MRI
+2. Subir imagen MRI
 3. Ejecutar análisis
 4. Resultados: máscara de segmentación, características del tumor, nivel de urgencia, archivo .zip con los resultados
 
-## Entrenamiento del Modelo
-
-1. Descargar y preparar datos:
-
-python src/datos.py
-python src/mapeo_archivos.py
-python src/transformar_datos.py
-
-2. Procesar datos con Dask:
-
-python procesamiento_datos/procesador_dask.py
-
-3. Entrenar el modelo UNet:
-
-python procesamiento_datos/modelo/entrenar_modelo.py
-
-4. Evaluar el modelo:
-
-python Analisis/Metricas_modelo.py
-
-5. Entrenar modelo de urgencia:
-
-python Analisis/Analisis_imagen.py
 
 ## Autor
 
