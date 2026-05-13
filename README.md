@@ -88,28 +88,28 @@ Enlace del dataset: [https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segment
 
 brain-tumor-segmentation-unet-app/  
 src/  
-  datos.py      # Importación de datos desde Kaggle  
-  mapeo_archivos.py      # Generación del catálogo de trabajo  
-  transformar_datos.py      # Adaptación y preprocesamiento de imágenes  
-  Analisis/  
-    Analisis_imagen.py       # Mini-modelo para predicción de urgencia  
-    Analisis_test.py       # Análisis del conjunto de test  
-    Metricas_modelo.py       # Métricas de calidad de segmentación  
-    Script_R_1.R       # Análisis estadístico en R  
-  Aplicacion/  
-    streamlit.py       # Página principal de la app  
-    cliente.py      # Comunicación con Dagster  
-    pages/  
-      Ficha_tecnica.py      # Ficha técnica del modelo  
-  orquestador/  
-    activos.py      # Activos de Dagster para el flujo de trabajo  
-  procesamiento_datos/  
-    procesador_dask.py      # Transformación paralela con Dask  
-    modelo/  
-      modelo_unet.py      # Arquitectura UNet  
-      entrenar_modelo.py      # Entrenamiento del modelo  
-      segmentar.py      # Lógica de segmentación  
-      caracteristicas.py      # Extracción de características tumorales  
+ &ensp; datos.py   &emsp;   # Importación de datos desde Kaggle  
+ &ensp; mapeo_archivos.py  &emsp;    # Generación del catálogo de trabajo  
+ &ensp; transformar_datos.py   &emsp;   # Adaptación y preprocesamiento de imágenes  
+ &ensp; Analisis/  
+ &ensp;&ensp;   Analisis_imagen.py    &emsp;   # Mini-modelo para predicción de urgencia  
+ &ensp;&ensp;   Analisis_test.py    &emsp;   # Análisis del conjunto de test  
+ &ensp;&ensp;   Metricas_modelo.py    &emsp;   # Métricas de calidad de segmentación  
+ &ensp;&ensp;   Script_R_1.R    &emsp;   # Análisis estadístico en R  
+ &ensp; Aplicacion/  
+ &ensp;&ensp;   streamlit.py    &emsp;   # Página principal de la app  
+ &ensp;&ensp;   cliente.py   &emsp;   # Comunicación con Dagster  
+ &ensp;&ensp;   pages/  
+ &ensp;&ensp;&ensp;     Ficha_tecnica.py   &emsp;   # Ficha técnica del modelo  
+ &ensp; orquestador/  
+ &ensp;&ensp;   activos.py   &emsp;   # Activos de Dagster para el flujo de trabajo  
+ &ensp; procesamiento_datos/  
+ &ensp;&ensp;   procesador_dask.py  &emsp;    # Transformación paralela con Dask  
+ &ensp;&ensp;   modelo/  
+ &ensp;&ensp;&ensp;     modelo_unet.py    &emsp;  # Arquitectura UNet  
+ &ensp;&ensp;&ensp;     entrenar_modelo.py    &emsp;  # Entrenamiento del modelo  
+ &ensp;&ensp;&ensp;     segmentar.py   &emsp;   # Lógica de segmentación  
+ &ensp;&ensp;&ensp;     caracteristicas.py  &emsp;    # Extracción de características tumorales  
 .gitignore  
 pyproject.toml  
 uv.lock  
