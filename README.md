@@ -15,8 +15,8 @@
 - [Instalación](#instalación)
 - [Configuración de Kaggle](#configuración-de-kaggle)
 - [Estructura del Proyecto](#estructura-del-proyecto)
-- [Uso de la Aplicación](#uso-de-la-aplicación)
 - [Entrenamiento del Modelo](#entrenamiento-del-modelo)
+- [Uso de la Aplicación](#uso-de-la-aplicación)
 - [Autor](#autor)
 - [Licencia](#licencia)
 
