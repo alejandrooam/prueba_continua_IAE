@@ -1,6 +1,6 @@
 # Brain Tumor UNet Segmentation App
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io)
 [![Dagster](https://img.shields.io/badge/Dagster-1.5+-green.svg)](https://dagster.io)
 [![UNet](https://img.shields.io/badge/Architecture-UNet-orange.svg)](https://arxiv.org/abs/1505.04597)
@@ -45,12 +45,12 @@ La aplicación incluye un formulario médico donde se pueden ingresar datos clí
 
 ## Requisitos Previos
 
-- Python 3.10 o superior
-- Git para clonar el repositorio
-- uv (gestor de paquetes)
-- Cuenta de Kaggle (para descargar los datos)
-- R (para análisis estadístico, opcional)
-- GPU recomendada (funciona con CPU pero más lento)
+- Python 3.12 o superior
+- Git
+- uv
+- Cuenta de Kaggle para descargar los datos
+- R
+- GPU recomendada (funciona con CPU pero es más lento)
 
 ## Instalación
 
@@ -82,11 +82,49 @@ Para descargar los datos necesitas una API key de Kaggle:
 3. Se descargará kaggle.json
 4. Coloca el archivo en la raíz del proyecto
 
-Importante: kaggle.json ya está en .gitignore, no se subirá a GitHub.
-
-Enlace del dataset: [INSERTAR AQUÍ EL ENLACE]
+Enlace del dataset: [https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segmentation/data]
 
 ## Estructura del Proyecto
+
+## Estructura del Proyecto
+
+brain-tumor-segmentation-unet-app/
+│
+├── src/
+│   ├── datos.py      # Importación de datos desde Kaggle
+│   ├── mapeo_archivos.py      # Generación del catálogo de trabajo
+│   ├── transformar_datos.py      # Adaptación y preprocesamiento de imágenes
+│   │
+│   ├── Analisis/
+│   │   ├── Analisis_imagen.py      # Mini-modelo para predicción de urgencia
+│   │   ├── Analisis_test.py      # Análisis del conjunto de test
+│   │   ├── Metricas_modelo.py      # Métricas de calidad de segmentación
+│   │   └── Script_R_1.R      # Análisis estadístico en R
+│   │
+│   ├── Aplicacion/
+│   │   ├── streamlit.py      # Página principal de la app
+│   │   ├── cliente.py      # Comunicación con Dagster
+│   │   └── pages/
+│   │       └── Ficha_tecnica.py      # Ficha técnica del modelo
+│   │
+│   ├── orquestador/
+│   │   └── activos.py      # Activos de Dagster para el flujo de trabajo
+│   │
+│   └── procesamiento_datos/
+│       ├── procesador_dask.py      # Transformación paralela con Dask
+│       └── modelo/
+│           ├── modelo_unet.py      # Arquitectura UNet
+│           ├── entrenar_modelo.py       # Entrenamiento del modelo
+│           ├── segmentar.py       # Lógica de segmentación
+│           └── caracteristicas.py      # Extracción de características tumorales
+│
+├── .gitignore
+├── pyproject.toml
+├── uv.lock
+└── README.md
+
+
+
 
 brain-tumor-segmentation-unet-app/
 │
@@ -133,10 +171,11 @@ La aplicación se abrirá en el navegador (normalmente http://localhost:8501).
 
 Flujo de uso:
 
-1. Subir imagen MRI (formato .tif)
-2. Rellenar formulario clínico (edad, síntomas, historial médico)
+
+1. Rellenar y subir formulario clínico
+2. 2. Subir imagen MRI
 3. Ejecutar análisis
-4. Resultados: máscara de segmentación, características del tumor, nivel de urgencia (Bajo/Medio/Alto), recomendación médica
+4. Resultados: máscara de segmentación, características del tumor, nivel de urgencia, archivo .zip con los resultados
 
 ## Entrenamiento del Modelo
 
@@ -161,30 +200,6 @@ python Analisis/Metricas_modelo.py
 5. Entrenar modelo de urgencia:
 
 python Analisis/Analisis_imagen.py
-
-## Métricas de Evaluación
-
-- Dice Score - Similitud entre máscara predicha y real
-- IoU (Intersection over Union) - Precisión de la segmentación
-- Precisión - Tasa de verdaderos positivos
-- Recall - Sensibilidad del modelo
-
-## Tecnologías Utilizadas
-
-- Python 3.10+ - Lenguaje principal
-- UNet - Arquitectura de segmentación
-- Streamlit - Interfaz web
-- Dagster - Orquestación de pipelines
-- Dask - Procesamiento paralelo
-- R - Análisis estadístico
-- uv - Gestor de paquetes
-- NumPy/Pandas - Manipulación de datos
-- OpenCV/PIL - Procesamiento de imágenes
-
-## Requisitos de Hardware
-
-- Mínimo (CPU): 8GB RAM, CPU de 4 núcleos
-- Recomendado (GPU): NVIDIA GPU con 4GB+ VRAM, 16GB RAM
 
 ## Autor
 
