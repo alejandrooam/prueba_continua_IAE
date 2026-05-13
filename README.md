@@ -8,7 +8,7 @@
 
 > **Trabajo académico** - Aplicación web para segmentación de tumores cerebrales en resonancias magnéticas (MRI) con evaluación de urgencia médica.
 
-## 📋 Tabla de Contenidos
+## Tabla de Contenidos
 - [Descripción General](#descripción-general)
 - [Características](#características)
 - [Arquitectura del Proyecto](#arquitectura-del-proyecto)
