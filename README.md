@@ -86,74 +86,34 @@ Enlace del dataset: [https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segment
 
 ## Estructura del Proyecto
 
-## Estructura del Proyecto
-
-brain-tumor-segmentation-unet-app/
-│
-├── src/
-│   ├── datos.py      # Importación de datos desde Kaggle
-│   ├── mapeo_archivos.py      # Generación del catálogo de trabajo
-│   ├── transformar_datos.py      # Adaptación y preprocesamiento de imágenes
-│   │
-│   ├── Analisis/
-│   │   ├── Analisis_imagen.py      # Mini-modelo para predicción de urgencia
-│   │   ├── Analisis_test.py      # Análisis del conjunto de test
-│   │   ├── Metricas_modelo.py      # Métricas de calidad de segmentación
-│   │   └── Script_R_1.R      # Análisis estadístico en R
-│   │
-│   ├── Aplicacion/
-│   │   ├── streamlit.py      # Página principal de la app
-│   │   ├── cliente.py      # Comunicación con Dagster
-│   │   └── pages/
-│   │       └── Ficha_tecnica.py      # Ficha técnica del modelo
-│   │
-│   ├── orquestador/
-│   │   └── activos.py      # Activos de Dagster para el flujo de trabajo
-│   │
-│   └── procesamiento_datos/
-│       ├── procesador_dask.py      # Transformación paralela con Dask
-│       └── modelo/
-│           ├── modelo_unet.py      # Arquitectura UNet
-│           ├── entrenar_modelo.py       # Entrenamiento del modelo
-│           ├── segmentar.py       # Lógica de segmentación
-│           └── caracteristicas.py      # Extracción de características tumorales
-│
-├── .gitignore
-├── pyproject.toml
-├── uv.lock
-└── README.md
-
-
-
-
-brain-tumor-segmentation-unet-app/
-src/
-  datos.py      # Importación de datos desde Kaggle
-  mapeo_archivos.py      # Generación del catálogo de trabajo
-  transformar_datos.py      # Adaptación y preprocesamiento de imágenes
-  Analisis/
-    Analisis_imagen.py       # Mini-modelo para predicción de urgencia
-    Analisis_test.py       # Análisis del conjunto de test
-    Metricas_modelo.py       # Métricas de calidad de segmentación
-    Script_R_1.R       # Análisis estadístico en R
-  Aplicacion/
-    streamlit.py       # Página principal de la app
-    cliente.py      # Comunicación con Dagster
-    pages/
-      Ficha_tecnica.py      # Ficha técnica del modelo
-  orquestador/
-    activos.py      # Activos de Dagster para el flujo de trabajo
-  procesamiento_datos/
-    procesador_dask.py      # Transformación paralela con Dask
-    modelo/
-      modelo_unet.py      # Arquitectura UNet
-      entrenar_modelo.py      # Entrenamiento del modelo
-      segmentar.py      # Lógica de segmentación
-      caracteristicas.py      # Extracción de características tumorales
-.gitignore
-pyproject.toml
-uv.lock
-README.md
+brain-tumor-segmentation-unet-app/  
+src/  
+  datos.py      # Importación de datos desde Kaggle  
+  mapeo_archivos.py      # Generación del catálogo de trabajo  
+  transformar_datos.py      # Adaptación y preprocesamiento de imágenes  
+  Analisis/  
+    Analisis_imagen.py       # Mini-modelo para predicción de urgencia  
+    Analisis_test.py       # Análisis del conjunto de test  
+    Metricas_modelo.py       # Métricas de calidad de segmentación  
+    Script_R_1.R       # Análisis estadístico en R  
+  Aplicacion/  
+    streamlit.py       # Página principal de la app  
+    cliente.py      # Comunicación con Dagster  
+    pages/  
+      Ficha_tecnica.py      # Ficha técnica del modelo  
+  orquestador/  
+    activos.py      # Activos de Dagster para el flujo de trabajo  
+  procesamiento_datos/  
+    procesador_dask.py      # Transformación paralela con Dask  
+    modelo/  
+      modelo_unet.py      # Arquitectura UNet  
+      entrenar_modelo.py      # Entrenamiento del modelo  
+      segmentar.py      # Lógica de segmentación  
+      caracteristicas.py      # Extracción de características tumorales  
+.gitignore  
+pyproject.toml  
+uv.lock  
+README.md  
 
 
 ## Entrenamiento del Modelo
@@ -175,6 +135,7 @@ Para entrenar el modelo, se utiliza Dagster como orquestador. Debes ejecutar los
 
 ```bash
 dagster dev
+```
 
 Luego accede a la interfaz web de Dagster (http://localhost:3000) y materializa los activos en el orden indicado.
 
