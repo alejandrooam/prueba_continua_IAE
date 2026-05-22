@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io)
 [![Dagster](https://img.shields.io/badge/Dagster-1.5+-green.svg)](https://dagster.io)
-[![UNet](https://img.shields.io/badge/Architecture-UNet-orange.svg)](https://arxiv.org/abs/1505.04597)
+[![FPN](https://img.shields.io/badge/Architecture-FPN-blue.svg)](https://arxiv.org/abs/1612.03144)
 [![uv](https://img.shields.io/badge/uv-Package%20Manager-cyan.svg)](https://docs.astral.sh/uv)
 
 > **Trabajo académico** - Aplicación web para segmentación de tumores cerebrales en resonancias magnéticas (MRI) con evaluación de urgencia médica.
