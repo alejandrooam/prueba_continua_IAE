@@ -54,7 +54,7 @@ La aplicación incluye un formulario médico donde se pueden ingresar datos clí
 
 1. Clonar el repositorio:
 
-git clone https://github.com/alejandrooam/brain-tumor-segmentation-unet-app.git
+git clone https://github.com/alejandrooam/brain-tumor-segmentation-fpn-app.git
 cd brain-tumor-segmentation-unet-app
 
 2. Instalar uv:
@@ -132,7 +132,7 @@ Para entrenar el modelo, se utiliza Dagster como orquestador. Debes ejecutar los
 ### Ejecución con Dagster
 
 ```bash
-dagster dev
+dagster dev -f src/orquestador/activos.py    
 ```
 
 Luego accede a la interfaz web de Dagster (http://localhost:3000) y materializa los activos en el orden indicado.
@@ -142,7 +142,9 @@ Luego accede a la interfaz web de Dagster (http://localhost:3000) y materializa 
 
 Iniciar la aplicación Streamlit:
 
-streamlit run Aplicacion/streamlit.py
+```bash
+python -m streamlit run src/Aplicacion/streamlit.py
+```
 
 La aplicación se abrirá en el navegador (normalmente http://localhost:8501).
 
