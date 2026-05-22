@@ -1,200 +1,225 @@
-import os
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from PIL import Image
-import warnings
-warnings.filterwarnings('ignore')
+# MAPEO_ARCHIVOS
 
-ruta_base = r"Trabajo\DATOS"
+# En esta primera parte, vamos a importar y transformar nuestros datos de modo que al final
+# obtengamos un diccionario o catálogo con el que podamos empezar a analizar y construir
+# el modelo en cuestión que nos permita identificar si un paciente tiene o no un tumor cerebral.
+
+# LIBRERÍAS NECESARIAS:
+import os            # Permite navegar por las carpetas del ordenador
+import pandas as pd  # Para manejar tablas de datos (DataFrames)
+import numpy as np   # Para cálculos matemáticos y manejar las fotos como matrices
+from pathlib import Path # Ayuda a que las rutas de los archivos funcionen en Windows y Mac sin fallos por / o \
+from PIL import Image    # Para abrir y manipular las imágenes reales
+import warnings      # Para que Python no nos llene la pantalla de avisos
+warnings.filterwarnings('ignore') # Ignorar esos avisos
+
+# 1. CONFIGURACIÓN DE RUTAS
+# 'r' antes de la comilla significa "texto en bruto" para que las barras invertidas \ no den error
+ruta_base = r"DATOS" 
+
+# Ruta de los datos exportados de kaggle: "data.csv"
 ruta_csv = os.path.join(ruta_base, "data.csv")
 
+# 2. CARGA INICIAL DE DATOS CLÍNICOS
+# Leemos "data.csv" y lo convertimos en una tabla llamada 'df_clinico'
+df_clinico = pd.read_csv(ruta_csv) 
 
-#CARGAMOS LOS DATOS Y VEMOS QUE ESTÁ BIEN
-
-df_clinico = pd.read_csv(ruta_csv) #Leemos el archivo en data.frame
-print(f"   Pacientes en data.csv: {len(df_clinico)}") #Vemos que hay 110 pacientes
-print(f"   Columnas disponibles: {df_clinico.columns.tolist()}") #Vemos qué columnas hay
-
-
-
+# 3. FUNCIÓN PARA DETECTAR lOS CANALES DISPONIBLES
 def detectar_secuencias_disponibles(ruta_imagen, umbral_similitud=0.95):
-#Se utiliza para detectar si una foto carece de PRE o de POST
-#Recibe la ruta de la foto y un umbral
-#Todas las fotos tienen FLAIR
-#Nos devuelve una tupla de booleanos  
+    """
+    Esta función mira si la foto tienen los 3 canales (Pre, Flair, Post)
+    o si alguna es una copia de la otra porque faltaba el dato.Partimos de que todas
+    tienen Flair.
+    """
     try:
+        # Abrimos la foto y la convertimos en una matriz para poder trabajar
         img = np.array(Image.open(ruta_imagen)).astype(np.float32)
-        #Convierte la imagen en una matriz para tratarla
         
-        #Las imágenes constan de tres canales
-        #El canal central (índice 1) siempre es FLAIR
+        # Las fotos médicas tienen 3 "canales" 
+        # El canal 1  es la secuencia FLAIR (todas la tienen)
+        # El canal 0 es la secuencia PRE-contraste: antes del líquido de contraste
+        # El canal 2 es la secuencia POS-contraste: tras el líquido de contraste en sangre
+
+        # CANAL FLAIR
         canal_flair = img[:,:,1]
         
-        #Si la imagen es constante (todo cero), algo va mal
+        # Si la foto está totalmente en negro (todo ceros), asumimos TRUE para no borrarla por error
         if np.all(canal_flair == 0):
             return True, True 
-        #Si todo es 0 la imagen está en negro y puede ser que esté corrupta, pero
-        #también puede ser que simplemente sea una imagen negra, por lo que suponemos
-        #que todo está bien para no perder al paciente
         
-        # Analizar canal Pre (índice 0)
+        # CANAL PRE-CONTRASTE
         canal_pre = img[:,:,0]
-        
-        #Calcular correlación entre Pre y FLAIR
-        #Si están altamente correlacionados, es que Pre no está disponible (relleno con FLAIR)
-        if np.all(canal_pre == 0):
-            pre_disponible = False
+        if np.all(canal_pre == 0): 
+            pre_disponible = False  # Si está vacío, lo definimos como no disponible
         else:
-            #Normalizar para correlación
-            pre_flat = canal_pre.flatten()
+            # Comparamos el canal PRE con el FLAIR
+            # Si son casi iguales (correlación > 0.95), han copiado una encima de otra. Luego, no hay Pre.
+           
+            # Pasamos de 2D a 1D.
+            # Convertimos la imagen en una lista larga de números para poder compararla 
+            # con el canal flare, pues cada imagen es un cuadrado 256x256.
+            pre_flat = canal_pre.flatten() 
             flair_flat = canal_flair.flatten()
-            
-            #Evitar división por cero
-            if np.std(pre_flat) > 0 and np.std(flair_flat) > 0:
-                correlacion_pre = np.corrcoef(pre_flat, flair_flat)[0,1]
-                pre_disponible = correlacion_pre < umbral_similitud
+            if np.std(pre_flat) > 0 and np.std(flair_flat) > 0: # Si hay datos, desviación típica > 0
+                correlacion_pre = np.corrcoef(pre_flat, flair_flat)[0,1] # Calculamos la similitud
+                pre_disponible = correlacion_pre < umbral_similitud # Si son distintos TRUE, si no, FALSE (no hay Pre)
             else:
-                pre_disponible = True
+                pre_disponible = True # Si no tiene datos, asumimos que el pre está disponible
+
+            # RESUMEN: Este bloque es nuestro control de calidad. Como en el dataset a 
+            # veces faltan secuencias y se rellenan con copias, usamos la correlación
+            # estadística. Si la capa PRE es casi idéntica a la capa FLAIR, el sistema 
+            # detecta que es una copia y marca que esa secuencia no está disponible 
+            # realmente para ese paciente. Así evitamos que la IA aprenda con datos
+            # repetidos o falsos.
         
-        #Analizar canal Post (índice 2)
+        # CANAL POST-CONSTRASTE
+        # Repetimos el procedimiento
         canal_post = img[:,:,2]
-        
         if np.all(canal_post == 0):
             post_disponible = False
         else:
             post_flat = canal_post.flatten()
-            
             if np.std(post_flat) > 0 and np.std(flair_flat) > 0:
                 correlacion_post = np.corrcoef(post_flat, flair_flat)[0,1]
                 post_disponible = correlacion_post < umbral_similitud
             else:
                 post_disponible = True
         
-        return pre_disponible, post_disponible
+        return pre_disponible, post_disponible # Nos devuelve: ¿Tiene Pre?, ¿Tiene Post?
         
     except Exception as e:
+        # Si la foto está rota o da error al abrir, decimos que "está todo bien" para no frenar el programa
         print(f"   Error detectando secuencias: {e}")
-        return True, True  # Por defecto, asumir que tiene todo
+        return True, True
 
-
-
+# 4. FUNCIÓN PARA CREAR EL ÍNDICE 
 def crear_indice_archivos(ruta_base, df_clinico, detectar=True):
-
-    registros = []
+    registros = [] # Aquí guardaremos la información de cada foto que encontremos
     pacientes_procesados = 0
     estadisticas = {'pre_faltan': 0, 'post_faltan': 0, 'ambos_faltan': 0}
     ruta_base = os.path.abspath(ruta_base)
-    
-    for carpeta in os.listdir(ruta_base): #listdir nos da la lista de direcciones de DATOS
-        ruta_carpeta = os.path.join(ruta_base, carpeta) #Une la dirección a DATOS con la de la carpeta
+    # Empezamos a entrar en cada carpeta, correspondiente a cada paciente, de la ruta base ("DATOS")
+    for carpeta in os.listdir(ruta_base): 
+        ruta_carpeta = os.path.join(ruta_base,carpeta)
         
-        if not os.path.isdir(ruta_carpeta) or not carpeta.startswith("TCGA_"): #Comprueba que sea una dirección y que sea de un paciente
+        # Nuestras carpetas empiezan por TCGA_
+        # Si no es una carpeta: .isdir comprueba si es un directorio o carpeta
+        # Si no empieza por "TCGA_": .startswith
+        # en esos casos ignoramos y seguimos con el resto 
+        if not os.path.isdir(ruta_carpeta) or not carpeta.startswith("TCGA_"):
             continue
         
-        # Extraer ID real (primeras 3 partes)
+        # Ej: TCGA_DU_5849_19950405
+        # 1. Separo por '_':  ['TCGA', 'DU', '5849', '19950405']
         partes = carpeta.split('_') 
-        id_paciente = '_'.join(partes[:3])
-        fecha = partes[3]
+        # 2. Une las primeras 3 partes con '_' para formar el ID del paciente
+        id_paciente = '_'.join(partes[:3])  # Resultado: 'TCGA_DU_5849'
+        fecha = partes[3] # La cuarta parte es la fecha del estudio
         
-        # Verificar si el paciente existe en data.csv
+        # Si el paciente cuya carpeta estamos tratando no está en data.csv (columna Patient), lo ignoro
         if id_paciente not in df_clinico['Patient'].values:
-            print(f"   Paciente {id_paciente} no encontrado en data.csv")
             continue
         
         pacientes_procesados += 1
-        info_paciente = df_clinico[df_clinico['Patient'] == id_paciente]
         
-        # Procesar archivos
-        archivos = [f for f in os.listdir(ruta_carpeta) if f.endswith('.tif')] #todas las imágenes
-        imagenes = [f for f in archivos if not f.endswith('_mask.tif')] #imágenes (no máscaras)
+
+        # De la carpeta, nos quedamos solo con los que terminan en .tif, imágenes y máscaras
+        archivos = [f for f in os.listdir(ruta_carpeta) if f.endswith('.tif')] 
+
+        # Separamos las imágenes reales de las máscaras
+        imagenes = [f for f in archivos if not f.endswith('_mask.tif')] 
         
-        # Para el primer corte, detectar secuencias disponibles
+        # Analizamos, con la función previa, si este paciente tiene Pre y Post.
         tiene_pre = True
         tiene_post = True
-        
+
+        # Si está activada la detección automática y hay al menos una imagen
         if detectar and len(imagenes) > 0:
+
+            # Basta con mirar la primera imagen del paciente o su "primer corte"
             primer_corte = os.path.join(ruta_carpeta, imagenes[0])
             tiene_pre, tiene_post = detectar_secuencias_disponibles(primer_corte)
-            
-            # Actualizar estadísticas
-            if not tiene_pre:
+
+            # Sumamos las estadísticas para el informe final
+            if not tiene_pre: 
                 estadisticas['pre_faltan'] += 1
-            if not tiene_post:
+            if not tiene_post: 
                 estadisticas['post_faltan'] += 1
-            if not tiene_pre and not tiene_post:
+            if not tiene_pre and not tiene_post: 
                 estadisticas['ambos_faltan'] += 1
         
+        # Recorremos cada imagen del paciente en análisis
         for img in imagenes:
-            mask = img.replace('.tif', '_mask.tif')
+            # Construimos el nombre de su máscara correspondiente
+            mask = img.replace('.tif', '_mask.tif') 
+            # Establecemos las rutas de las imagenes y sus mascaras
             ruta_img = os.path.join(ruta_carpeta, img)
             ruta_mask = os.path.join(ruta_carpeta, mask)
             
-            
-            # Extraer número de corte
+            # Sacamos el número de corte del cerebro 
+            # Ej: TCGA_CS_4941_19960909_1.tif, el corte se corresponde al número 1.
             try:
                 num_corte = int(img.replace('.tif', '').split('_')[-1])
             except:
-                num_corte = -1
+                num_corte = -1  # si algo falla, ponemos -1
             
-            # Leer máscara para estadísticas
+            # ANALIZAMOS LA MÁSCARA 
             try:
                 mask_array = np.array(Image.open(ruta_mask))
+
+                # Si hay algún píxel mayor que 0, hay tumor según la RM.
                 tiene_tumor = np.any(mask_array > 0)
                 tamaño_tumor = np.sum(mask_array > 0) if tiene_tumor else 0
+               
             except:
                 tiene_tumor = None
-                tamaño_tumor = None
-            
+                tamaño_tumor = None 
+
+            # Registramos la información obtenida
             registros.append({
                 'id_paciente': id_paciente,
-                'carpeta_original': carpeta,
-                'fecha_muestra': fecha,
+				'carpeta_original': carpeta,
+				'fecha_muestra': fecha,
                 'num_corte': num_corte,
                 'ruta_imagen': ruta_img,
                 'ruta_mascara': ruta_mask,
-                'institucion': id_paciente.split('_')[1],
+				'institucion': id_paciente.split('_')[1],
                 'tiene_pre': tiene_pre,
                 'tiene_post': tiene_post,
-                'canales_disponibles': 1 + int(tiene_pre) + int(tiene_post),
-                'mascara_tiene_tumor': tiene_tumor,
+                'mascara_tiene_tumor': tiene_tumor, 
                 'tamaño_tumor_pixeles': tamaño_tumor
             })
     
+    # Convertimos toda la lista de registros en una tabla de Pandas
     df = pd.DataFrame(registros)
-    
-    print(f"\n  Pacientes procesados: {pacientes_procesados}") #Vemos que haya 110
-    
-    if detectar:
-        print(f"\n   SECUENCIAS DETECTADAS:")
-        print(f"       Pacientes sin Pre-contrast: {estadisticas['pre_faltan']}")
-        print(f"       Pacientes sin Post-contrast: {estadisticas['post_faltan']}") #Debe haber 9
-        print(f"       Pacientes sin ambos: {estadisticas['ambos_faltan']}") #Debe haber 6
-        
+    print(f"\n  Pacientes procesados: {pacientes_procesados}")
     return df
 
-# Crear índice
+# EJECUTAMOS LA CREACIÓN DEL ÍNDICE
 df_archivos = crear_indice_archivos(ruta_base, df_clinico, detectar=True)
 
 
+# 5. CREAMOS EL CATÁLOGO MAESTRO (merge)
+# Pegamos df_archivos con data.csv usando el ID de paciente.
+
+# Tabla izquierda (df_archivos): tiene una fila por cada imagen
+# Tabla derecha (df_clinico): tiene una fila por cada paciente (mas pequeña)
 
 df_catalogo = pd.merge(
     df_archivos,
     df_clinico,
-    left_on='id_paciente',
-    right_on='Patient',
+    left_on='id_paciente', # df_archivos
+    right_on='Patient',   # data.csv
     how='left'
 )
 
-print(f"    Registros en catálogo: {len(df_catalogo)}")
-print(f"    Pacientes únicos: {df_catalogo['id_paciente'].nunique()}")
-
-
+# 6. RESUMEN FINAL
 cortes_con_tumor = df_catalogo['mascara_tiene_tumor'].sum()
-print(f"    Cortes CON tumor: {cortes_con_tumor} ({cortes_con_tumor/len(df_catalogo)*100:.1f}%)")
-print(f"    Cortes SIN tumor: {len(df_catalogo)-cortes_con_tumor} ({(len(df_catalogo)-cortes_con_tumor)/len(df_catalogo)*100:.1f}%)")
+print(f" Cortes CON tumor detectados: {cortes_con_tumor}")
+print(f" Cortes SIN tumor detectados: {len(df_catalogo)-cortes_con_tumor}")
 
-
+# Guardamos todo un archivo final con el que trabajaremos a partir de ahora.
 ruta_catalogo = os.path.join(ruta_base, "catalogo_maestro_final.csv")
 df_catalogo.to_csv(ruta_catalogo, index=False)
 print(f"   Guardado en: {ruta_catalogo}")

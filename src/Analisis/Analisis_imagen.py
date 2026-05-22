@@ -1,4 +1,14 @@
-# src/modelo_urgencia/modelo_urgencia.py
+# src/Analisis/Analisis_imagen.py
+
+# =============================================================================
+# MODELO DE CLASIFICACION DE RIESGO (URGENCIA TUMORAL)
+# =============================================================================
+# Este modulo implementa un modelo de regresion logistica para predecir
+# la probabilidad de fallecimiento (urgencia clinica) de pacientes con tumores
+# cerebrales a partir de caracteristicas radiomicas y datos clinicos.
+# =============================================================================
+
+# LIBRERIAS NECESARIAS
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -6,42 +16,70 @@ import pickle
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, f1_score
 import warnings
 warnings.filterwarnings('ignore')
 
 
+# =============================================================================
+# CLASE PRINCIPAL: MODELO DE URGENCIA TUMORAL
+# =============================================================================
+
 class ModeloUrgenciaTumoral:
     """
-    Modelo sencillo para predecir probabilidad de muerte (urgencia del tumor)
-    Maneja automáticamente datos faltantes y clases desbalanceadas
+    Modelo para predecir probabilidad de muerte (urgencia del tumor)
+    Maneja automaticamente datos faltantes y clases desbalanceadas
     """
     
     def __init__(self):
+        """
+        Inicializa el modelo con sus componentes de preprocesamiento
+        """
+        # Imputador: reemplaza valores faltantes con la mediana
         self.imputador = SimpleImputer(strategy='median')
+        # Escalador: estandariza las variables a media 0 y desviacion 1
         self.escalador = StandardScaler()
+        # Modelo de regresion logistica (se entrenara despues)
         self.modelo = None
+        # Lista de variables usadas durante el entrenamiento
         self.variables_entrenamiento = None
+        # Umbral de decision optimo (calculado durante entrenamiento)
         self.umbral = 0.5
+        # Riesgo base: probabilidad media de muerte en la cohorte
         self.media_riesgo_base = None
         
     def preprocesar(self, X):
-        """Preprocesa los datos: imputa NAs y escala"""
+        """
+        Preprocesa los datos: imputa NAs y escala las variables
+        
+        Args:
+            X: DataFrame o array con las variables predictoras
+            
+        Returns:
+            X_escalado: Array numpy con los datos preprocesados
+        """
+        # Paso 1: Imputar valores faltantes con la mediana
         X_imputado = self.imputador.transform(X)
+        # Paso 2: Estandarizar (media 0, desviacion 1)
         X_escalado = self.escalador.transform(X_imputado)
         return X_escalado
     
     def entrenar(self, df, variables=None, target='death01', test_size=0.2):
         """
-        Entrena el modelo
+        Entrena el modelo de regresion logistica
+        
+        Args:
+            df: DataFrame con los datos de entrenamiento
+            variables: Lista de columnas a usar como predictoras
+            target: Nombre de la columna objetivo (death01)
+            test_size: Proporcion de datos para validacion
+            
+        Returns:
+            metricas: Diccionario con AUC, coeficientes y estadisticas
         """
         
-        print("="*60)
-        print("🏥 ENTRENANDO MODELO DE URGENCIA TUMORAL")
-        print("="*60)
-        
-        # Seleccionar variables
+        # Seleccionar variables predictoras
         if variables is None:
             variables = [
                 'area', 'perimetro', 'circularidad',
@@ -49,148 +87,107 @@ class ModeloUrgenciaTumoral:
                 'percentil_95_flair', 'textura_contraste',
                 'age_at_initial_pathologic', 'neoplasm_histologic_grade'
             ]
+            # Filtrar solo las que existen en el DataFrame
             variables = [v for v in variables if v in df.columns]
         
+        # Guardar lista de variables para uso futuro
         self.variables_entrenamiento = variables
-        print(f"\n📊 Variables predictoras: {len(variables)}")
-        for v in variables:
-            print(f"   - {v}")
         
-        # Preparar datos
+        # Preparar datos: separar predictores (X) y objetivo (y)
         X = df[variables].copy()
         y = df[target].copy()
         
-        # Eliminar filas sin target
+        # Eliminar filas sin valor en la variable objetivo
         mascara_valida = ~y.isna()
         X = X[mascara_valida]
         y = y[mascara_valida]
         
-        # Asegurar que y es numérico
+        # Asegurar que y es numerico entero (0 o 1)
         y = y.astype(int)
         
-        print(f"\n📋 Total pacientes: {len(X)}")
-        print(f"   Vivos (clase 0): {(y==0).sum()} ({100*(y==0).sum()/len(y):.1f}%)")
-        print(f"   Fallecidos (clase 1): {(y==1).sum()} ({100*(y==1).sum()/len(y):.1f}%)")
+        # Contar casos positivos (fallecidos) para validacion
+        n_fallecidos = (y == 1).sum()
         
-        # Verificar si hay suficientes fallecidos
-        n_fallecidos = (y==1).sum()
-        
+        # Validar que existan casos positivos
         if n_fallecidos == 0:
-            print("\n⚠️ ERROR: No hay pacientes fallecidos en los datos!")
-            print("   No se puede entrenar el modelo.")
             raise ValueError("No hay casos positivos (death01=1) en los datos")
         
-        if n_fallecidos < 5:
-            print(f"\n⚠️ ADVERTENCIA: Solo hay {n_fallecidos} pacientes fallecidos.")
-            print("   El modelo tendrá poca capacidad predictiva.")
-        
-        # Dividir entrenamiento/validación
-        # Para clases muy desbalanceadas, usar stratify pero con cuidado
+        # Dividir datos en entrenamiento y validacion
         try:
+            # Si hay al menos 2 fallecidos, usar estratificacion
             if n_fallecidos >= 2:
                 X_train, X_val, y_train, y_val = train_test_split(
                     X, y, test_size=test_size, random_state=42, stratify=y
                 )
             else:
+                # Si no, hacer division simple
                 X_train, X_val, y_train, y_val = train_test_split(
                     X, y, test_size=test_size, random_state=42
                 )
         except ValueError:
-            # Si falla la estratificación, hacer split normal
+            # Fallback: division simple si falla la estratificacion
             X_train, X_val, y_train, y_val = train_test_split(
                 X, y, test_size=test_size, random_state=42
             )
         
-        print(f"\n📚 Entrenamiento: {len(X_train)} pacientes")
-        print(f"   Vivos: {(y_train==0).sum()}, Fallecidos: {(y_train==1).sum()}")
-        print(f"📖 Validación: {len(X_val)} pacientes")
-        print(f"   Vivos: {(y_val==0).sum()}, Fallecidos: {(y_val==1).sum()}")
-        
-        # Verificar que el conjunto de validación tenga ambas clases
+        # Verificar que validacion tenga ambas clases
         if len(np.unique(y_val)) < 2:
-            print(f"\n⚠️ El conjunto de validación tiene solo una clase: {np.unique(y_val)[0]}")
-            print("   Se usará el conjunto de entrenamiento para evaluar.")
+            # Si no, usar entrenamiento como validacion
             X_val = X_train.copy()
             y_val = y_train.copy()
         
-        # Contar NAs
-        print("\n🔍 Datos faltantes en entrenamiento:")
-        for v in variables:
-            nulos = X_train[v].isna().sum()
-            if nulos > 0:
-                print(f"   {v}: {nulos} ({100*nulos/len(X_train):.1f}%)")
-        
-        # Entrenar preprocesador
-        print("\n⚙️ Entrenando preprocesador...")
+        # Entrenar preprocesador con datos de entrenamiento
         self.imputador.fit(X_train)
         self.escalador.fit(self.imputador.transform(X_train))
         
-        # Preprocesar
+        # Preprocesar ambos conjuntos
         X_train_proc = self.preprocesar(X_train)
         X_val_proc = self.preprocesar(X_val)
         
-        # Entrenar modelo
-        print("🤖 Entrenando modelo de regresión logística...")
-        
-        # Pesos para balancear clases
-        proporcion_fallecidos = (y_train == 1).sum() / len(y_train)
-        print(f"   Proporción fallecidos en entrenamiento: {proporcion_fallecidos:.2%}")
-        
+        # Configurar modelo de regresion logistica con balanceo de clases
         self.modelo = LogisticRegression(
             C=1.0,
-            class_weight='balanced',  # Siempre balancear para este caso
+            class_weight='balanced',  # Balancea clases desbalanceadas
             random_state=42,
             max_iter=1000
         )
+        
+        # Entrenar el modelo
         self.modelo.fit(X_train_proc, y_train)
         
-        # Evaluar
+        # Predecir probabilidades en validacion
         y_pred_proba = self.modelo.predict_proba(X_val_proc)[:, 1]
         
-        # Calcular AUC (solo si hay dos clases en validación)
-        if len(np.unique(y_val)) > 1:
-            auc = roc_auc_score(y_val, y_pred_proba)
-        else:
-            auc = 0.5
-            print(f"   ⚠️ No se pudo calcular AUC (validación con una sola clase)")
+        # Calcular AUC (Area Under the ROC Curve)
+        auc = roc_auc_score(y_val, y_pred_proba)
         
-        # Encontrar mejor umbral
+        # Encontrar el mejor umbral de decision usando F1-score
         if len(np.unique(y_val)) > 1:
             umbrales = np.arange(0.1, 0.9, 0.05)
             mejores_f1 = 0
             mejor_umbral = 0.5
             for umb in umbrales:
                 y_pred = (y_pred_proba >= umb).astype(int)
-                if len(np.unique(y_pred)) > 1:  # Evitar f1_score con una clase
+                if len(np.unique(y_pred)) > 1:
                     f1 = f1_score(y_val, y_pred)
                     if f1 > mejores_f1:
                         mejores_f1 = f1
                         mejor_umbral = umb
             self.umbral = mejor_umbral
         
-        print("\n" + "="*60)
-        print("📊 RESULTADOS DEL MODELO")
-        print("="*60)
-        print(f"   AUC ROC: {auc:.4f}")
-        print(f"   Mejor umbral: {self.umbral:.3f}")
-        
-        # Mostrar coeficientes
+        # Crear DataFrame con coeficientes y odds ratios
         coefs = pd.DataFrame({
             'Variable': variables,
             'Coeficiente': self.modelo.coef_[0],
             'Odds_Ratio': np.exp(self.modelo.coef_[0])
         })
+        # Ordenar por magnitud del coeficiente (importancia)
         coefs = coefs.reindex(coefs['Coeficiente'].abs().sort_values(ascending=False).index)
-        
-        print("\n📈 VARIABLES QUE MÁS INFLUYEN EN LA URGENCIA:")
-        for _, row in coefs.head(5).iterrows():
-            direccion = "🔴 AUMENTA el riesgo" if row['Coeficiente'] > 0 else "🟢 DISMINUYE el riesgo"
-            print(f"   {row['Variable']}: {row['Coeficiente']:.4f} → {direccion}")
         
         # Calcular riesgo base (probabilidad media de muerte)
         self.media_riesgo_base = y.mean()
-        print(f"\n📊 Riesgo base de muerte en la cohorte: {self.media_riesgo_base:.2%}")
         
+        # Empaquetar metricas para retorno
         metricas = {
             'auc': auc,
             'mejor_umbral': self.umbral,
@@ -206,134 +203,145 @@ class ModeloUrgenciaTumoral:
     def predecir_urgencia(self, df, return_proba=True):
         """
         Predice la probabilidad de muerte (urgencia) para nuevos pacientes
-        """
-        if self.modelo is None:
-            raise ValueError("El modelo no ha sido entrenado aún")
         
-        # Verificar variables faltantes
+        Args:
+            df: DataFrame con los datos de los pacientes
+            return_proba: Si True devuelve probabilidad, si False devuelve clase binaria
+            
+        Returns:
+            Array con probabilidades o clases predichas
+        """
+        # Verificar que el modelo fue entrenado
+        if self.modelo is None:
+            raise ValueError("El modelo no ha sido entrenado aun")
+        
+        # Identificar variables faltantes en los datos de entrada
         variables_faltantes = [v for v in self.variables_entrenamiento if v not in df.columns]
         if variables_faltantes:
-            print(f"⚠️ Variables faltantes (se imputarán): {variables_faltantes}")
+            # Crear columnas faltantes con NaN (se imputaran)
             for v in variables_faltantes:
                 df[v] = np.nan
         
         # Seleccionar variables en el orden correcto
         X = df[self.variables_entrenamiento].copy()
         
-        # Preprocesar
+        # Preprocesar (imputar y escalar)
         X_proc = self.preprocesar(X)
         
-        # Predecir probabilidad
+        # Predecir probabilidad de muerte
         prob_muerte = self.modelo.predict_proba(X_proc)[:, 1]
         
+        # Devolver probabilidad o clase segun parametro
         if return_proba:
             return prob_muerte
         else:
             return (prob_muerte >= self.umbral).astype(int)
     
     def guardar(self, ruta):
-        """Guarda el modelo en disco"""
+        """
+        Guarda el modelo completo en disco usando pickle
+        
+        Args:
+            ruta: Ruta donde guardar el archivo .pkl
+        """
         with open(ruta, 'wb') as f:
             pickle.dump(self, f)
-        print(f"💾 Modelo guardado en: {ruta}")
     
     @classmethod
     def cargar(cls, ruta):
-        """Carga el modelo desde disco"""
+        """
+        Carga un modelo previamente guardado desde disco
+        
+        Args:
+            ruta: Ruta del archivo .pkl
+            
+        Returns:
+            modelo: Instancia de ModeloUrgenciaTumoral restaurada
+        """
         with open(ruta, 'rb') as f:
             modelo = pickle.load(f)
-        print(f"📂 Modelo cargado desde: {ruta}")
         return modelo
 
 
+# =============================================================================
+# FUNCIONES AUXILIARES
+# =============================================================================
+
 def entrenar_modelo_urgencia(df, output_dir=None):
-    """Función principal para entrenar el modelo"""
+    """
+    Funcion principal para entrenar el modelo de urgencia
     
+    Args:
+        df: DataFrame con los datos de entrenamiento
+        output_dir: Directorio donde guardar resultados (opcional)
+        
+    Returns:
+        modelo: Modelo entrenado
+        metricas: Diccionario con metricas de rendimiento
+    """
+    
+    # Crear instancia del modelo
     modelo = ModeloUrgenciaTumoral()
+    
+    # Entrenar y obtener metricas
     metricas = modelo.entrenar(df)
     
+    # Guardar resultados si se especifica directorio
     if output_dir:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Guardar modelo completo
         modelo.guardar(output_dir / "modelo_urgencia.pkl")
+        
+        # Guardar coeficientes en CSV
         metricas['coeficientes'].to_csv(output_dir / "coeficientes_modelo.csv", index=False)
         
-        # Guardar también el resumen
+        # Guardar resumen en archivo de texto
         with open(output_dir / "resumen_modelo.txt", "w", encoding='utf-8') as f:
-            f.write("="*60 + "\n")
+            f.write("=" * 60 + "\n")
             f.write("MODELO DE URGENCIA TUMORAL\n")
-            f.write("="*60 + "\n\n")
+            f.write("=" * 60 + "\n\n")
             f.write(f"AUC ROC: {metricas['auc']:.4f}\n")
             f.write(f"Mejor umbral: {metricas['mejor_umbral']:.3f}\n")
             f.write(f"Riesgo base: {metricas['riesgo_base']:.2%}\n\n")
-            f.write("VARIABLES MÁS IMPORTANTES:\n")
+            f.write("VARIABLES MAS IMPORTANTES:\n")
             f.write(metricas['coeficientes'].head(10).to_string())
     
     return modelo, metricas
 
 
 def diagnosticar_datos(df, target='death01'):
-    """Diagnóstico rápido de los datos"""
-    print("\n" + "="*60)
-    print("🔍 DIAGNÓSTICO DE DATOS")
-    print("="*60)
+    """
+    Diagnostico rapido de la calidad de los datos
     
-    print(f"\n📊 Dimensiones: {df.shape}")
+    Args:
+        df: DataFrame a diagnosticar
+        target: Nombre de la variable objetivo
+    """
     
-    print(f"\n🎯 Variable objetivo '{target}':")
+    # Mostrar dimensiones del dataset
+    print("\n" + "=" * 60)
+    print("DIAGNOSTICO DE DATOS")
+    print("=" * 60)
+    print(f"\nDimensiones: {df.shape}")
+    
+    # Analizar variable objetivo
+    print(f"\nVariable objetivo '{target}':")
     if target in df.columns:
-        print(f"   Valores únicos: {sorted(df[target].unique())}")
-        print(f"   Vivos (0): {(df[target]==0).sum()}")
-        print(f"   Fallecidos (1): {(df[target]==1).sum()}")
+        print(f"   Valores unicos: {sorted(df[target].unique())}")
+        print(f"   Vivos (0): {(df[target] == 0).sum()}")
+        print(f"   Fallecidos (1): {(df[target] == 1).sum()}")
         print(f"   NAs: {df[target].isna().sum()}")
         
-        # Verificar si hay suficientes
-        if (df[target]==1).sum() < 5:
-            print(f"   ⚠️ Solo {(df[target]==1).sum()} fallecidos. Muy pocos para un modelo robusto.")
+        # Advertencia si hay pocos fallecidos
+        if (df[target] == 1).sum() < 5:
+            print(f"   Advertencia: Solo {(df[target]==1).sum()} fallecidos. Modelo poco robusto.")
     else:
-        print(f"   ❌ No se encuentra la columna '{target}'")
+        print(f"   Error: No se encuentra la columna '{target}'")
     
-    # Mostrar primeras filas
-    print("\n📋 Primeras 5 filas:")
+    # Mostrar primeras filas como muestra
+    print("\nPrimeras 5 filas:")
     print(df.head())
     
     return
-
-
-# ============================================================
-# EJECUCIÓN DIRECTA PARA PRUEBA
-# ============================================================
-
-if __name__ == "__main__":
-    # Crear datos de ejemplo con fallecidos
-    data = """area,circularidad,textura_contraste,age_at_initial_pathologic,neoplasm_histologic_grade,death01
-326.0,0.1395,997.42,20.0,1.0,0
-9.0,1.6646,14808.11,54.0,2.0,0
-5860.0,0.5317,3293.98,57.0,1.0,0
-372.0,0.4802,2452.33,37.0,1.0,0
-4254.0,0.1748,940.13,31.0,1.0,1
-192.0,0.2207,3467.64,69.0,1.0,0
-2054.0,0.2624,1477.20,58.0,2.0,1
-"""
-    
-    from io import StringIO
-    df = pd.read_csv(StringIO(data))
-    
-    # Diagnóstico
-    diagnosticar_datos(df)
-    
-    # Entrenar
-    modelo, metricas = entrenar_modelo_urgencia(df, output_dir="modelo_prueba")
-    
-    # Predecir
-    nuevo = pd.DataFrame({
-        'area': [3000],
-        'circularidad': [0.30],
-        'textura_contraste': [5000],
-        'age_at_initial_pathologic': [65],
-        'neoplasm_histologic_grade': [3]
-    })
-    
-    urgencia = modelo.predecir_urgencia(nuevo)[0]
-    print(f"\n🔮 URGENCIA DEL TUMOR: {urgencia:.3f}")
-    print(f"   Riesgo de muerte: {urgencia*100:.1f}%")

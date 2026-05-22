@@ -17,5 +17,4 @@ env/
 *.tmp
 kaggle.json
 .kaggle/
-DATOS/
-datos_procesados/
+.tmp*/

@@ -1,56 +1,98 @@
+# APLICACION/CLIENTE
 # CREAMOS LA COMUNICACION ENTRE LA APLICACION Y EL DAGSTER
 
-import requests
-import json
-import pandas as pd
-import numpy as np
-from PIL import Image
-import io
-import base64
-from typing import Tuple, Dict, Any, Optional
-import streamlit as st
-from pathlib import Path
-import tempfile
-import shutil
-import joblib
-from datetime import datetime
-import cv2
-import torch
-import sys
-from skimage.measure import label, regionprops
-from skimage.feature import graycomatrix, graycoprops
+# =============================================================================
+# LIBRERIAS NECESARIAS
+# =============================================================================
 
-src_path = Path(__file__).parent.parent  # Sube de Aplicacion a src
+import requests          # Comunicacion HTTP con la API de Dagster
+import json              # Manejo de datos en formato JSON
+import pandas as pd      # Manipulacion de dataframes
+import numpy as np       # Computacion numerica y manejo de arrays
+from PIL import Image    # Procesamiento basico de imagenes
+import io                # Operaciones de entrada/salida en memoria
+import base64            # Codificacion/decodificacion Base64
+from typing import Tuple, Dict, Any, Optional  # Tipado de datos
+import streamlit as st   # Framework para interfaz web
+from pathlib import Path # Manejo de rutas de archivos
+import tempfile          # Creacion de archivos y directorios temporales
+import shutil            # Operaciones avanzadas de archivos
+import joblib            # Carga de modelos guardados (formato .pkl)
+from datetime import datetime  # Generacion de timestamps
+import cv2               # OpenCV: procesamiento avanzado de imagenes
+import torch             # PyTorch: deep learning
+import sys               # Manipulacion del sistema
+from skimage.measure import label, regionprops  # Propiedades morfologicas
+from skimage.feature import graycomatrix, graycoprops  # Matriz de co-ocurrencia
+
+# =============================================================================
+# CONFIGURACION DE RUTAS
+# =============================================================================
+
+# Obtiene el directorio padre del directorio actual (sube de Aplicacion a src)
+src_path = Path(__file__).parent.parent
+# Inserta src_path al inicio de sys.path para que Python busque modulos alli
 sys.path.insert(0, str(src_path))
 
-# Ahora importar desde src
-from transformar_datos import procesar_imagen_completo
-from procesamiento_datos.modelo.segmentar import segmentar_imagen
-from procesamiento_datos.modelo.modelo_unet import DobleConv, UNet
+# =============================================================================
+# IMPORTACION DE MODULOS PROPIOS DEL PROYECTO
+# =============================================================================
 
+from transformar_datos import procesar_imagen_completo  # Preprocesamiento de resonancias
+from src.procesamiento_datos.modelo.segmentar import segmentar_imagen  # Inferencia del modelo
+from src.procesamiento_datos.modelo.modelo_fpn import DobleConv, FPN  # Arquitectura FPN
+
+
+# =============================================================================
+# CLASE PRINCIPAL: DAGSTER CLIENT
+# =============================================================================
 
 class DagsterClient:
-    """Cliente para comunicarse con la API de Dagster"""
+    """
+    Cliente para comunicarse con la API de Dagster.
+    Actua como intermediario entre la aplicacion web (Streamlit) y el orquestador Dagster,
+    gestionando los datos temporales de cada sesion de paciente.
+    """
     
     def __init__(self, base_url: str = "http://localhost:3000"):
+        """
+        Inicializa el cliente con la URL base del orquestador Dagster.
+        
+        Args:
+            base_url: URL donde corre el servidor de Dagster (puerto 3000 por defecto)
+        """
         self.base_url = base_url
     
     def inicializar_sesion(self, session_id: str) -> str:
-        """Inicializa una nueva sesión y crea el directorio temporal"""
+        """
+        Inicializa una nueva sesion y crea el directorio temporal.
+        
+        Args:
+            session_id: Identificador unico de la sesion
+        
+        Returns:
+            Ruta del directorio temporal creado
+        """
         temp_dir = Path(tempfile.gettempdir()) / f"mrai_session_{session_id}"
         temp_dir.mkdir(exist_ok=True)
         return str(temp_dir)
     
     def guardar_datos_clinicos(self, datos_clinicos: Dict[str, Any], session_id: str) -> str:
         """
-        Guarda los datos clínicos (aunque tengan valores nulos) y aplica analisis_datos()
-        Devuelve la ruta del directorio temporal
+        Guarda los datos clinicos del paciente en un CSV temporal.
+        
+        Args:
+            datos_clinicos: Diccionario con los datos del paciente
+            session_id: Identificador de la sesion
+        
+        Returns:
+            Ruta del directorio temporal donde se guardo el CSV
         """
-        # Crear directorio temporal para esta sesión si no existe
+        # Crear directorio temporal para esta sesion si no existe
         temp_dir = Path(tempfile.gettempdir()) / f"mrai_session_{session_id}"
         temp_dir.mkdir(exist_ok=True)
         
-        # Guardar datos clínicos en CSV (con valores None permitidos)
+        # Guardar datos clinicos en CSV (con valores None permitidos)
         df_clinicos = pd.DataFrame([datos_clinicos])
         ruta_clinicos = temp_dir / "datos_clinicos.csv"
         df_clinicos.to_csv(ruta_clinicos, index=False, na_rep='NULL')
@@ -59,10 +101,19 @@ class DagsterClient:
     
     def procesar_imagen(self, imagen_tif_bytes: bytes, datos_clinicos: Dict[str, Any]) -> Tuple[np.ndarray, pd.DataFrame]:
         """
-        Ejecuta el activo 'procesar_imagen' de Dagster
-        Devuelve máscara y características de la imagen
+        Ejecuta el pipeline completo de procesamiento de imagen:
+        1. Preprocesado (recorte y normalizacion)
+        2. Segmentacion del tumor con FPN
+        3. Extraccion de biomarcadores
+        
+        Args:
+            imagen_tif_bytes: Imagen de resonancia en formato TIF como bytes
+            datos_clinicos: Datos del paciente (no se usan directamente, se pasan por compatibilidad)
+        
+        Returns:
+            Tupla con (mascara_binaria, DataFrame de caracteristicas)
         """
-        # 1. Guardar la imagen temporalmente
+        # PASO 1: Guardar la imagen temporalmente
         temp_dir = Path(tempfile.gettempdir()) / "mrai_temp"
         temp_dir.mkdir(exist_ok=True)
         temp_img_path = temp_dir / f"temp_image_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.tif"
@@ -70,7 +121,7 @@ class DagsterClient:
         with open(temp_img_path, 'wb') as f:
             f.write(imagen_tif_bytes)
         
-        # 2. Procesar imagen con tu función (recorte, normalización, etc.)
+        # PASO 2: Procesar imagen (recorte, normalizacion, etc.)
         fila_maestro = {
             'ruta_imagen': str(temp_img_path),
             'ruta_mascara': None
@@ -78,37 +129,39 @@ class DagsterClient:
         img_procesada, _ = procesar_imagen_completo(fila_maestro, entrenando=False)
         # img_procesada es (H, W, 3) con canales: [FLAIR, pre, post]
         
-        # 3. Guardar imagen procesada temporalmente para el modelo
+        # PASO 3: Guardar imagen procesada temporalmente para el modelo
         temp_npy_path = temp_dir / f"img_procesada_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.npy"
         np.save(temp_npy_path, img_procesada)
         
-        # 4. Cargar modelo de segmentación
+        # PASO 4: Cargar modelo de segmentacion FPN entrenado
         DATOS_PROCESADOS = src_path.parent / "datos_procesados"
-        model = UNet(entrada=3, salida=1)
-        modelo_unet_entrenado = DATOS_PROCESADOS / "modelo_unet_mejor.pth"
-        model.load_state_dict(torch.load(modelo_unet_entrenado, map_location='cpu'))
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') #Busco si tengo gpu para trabajar ahí
-        model.to(device) #Le digo al modelo dónde trabajamos
-
+        model = FPN()
+        modelo_fpn_entrenado = DATOS_PROCESADOS / "modelo_fpn_mejor.pth"
+        model.load_state_dict(torch.load(modelo_fpn_entrenado, map_location='cpu'))
+        
+        # Seleccionar dispositivo: GPU si esta disponible, sino CPU
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model.to(device)  # Mover el modelo al dispositivo elegido
+        
+        # Cargar umbral optimo para binarizar la mascara
         umbral = np.load(DATOS_PROCESADOS / "umbral.npy")
         
-        # 5. Segmentar la imagen (obtener máscara)
+        # PASO 5: Segmentar la imagen (obtener mascara)
         mascara_prob, mascara_binaria = segmentar_imagen(
             model=model,
             imagen_npy_path=str(temp_npy_path),
             device=device,
             umbral=umbral
         )
-        
-        # 6. Extraer características de la máscara
-        caracteristicas = self.extraer_caracteristicas_completas(img_procesada, mascara_binaria)
 
-        mascara_binaria = cv2.resize(mascara_binaria.astype(np.uint8), (256,256),interpolation=cv2.INTER_NEAREST)
         
-        # 7. Crear DataFrame con las características
+        # PASO 6: Extraer caracteristicas radiomicas de la mascara
+        caracteristicas = self.extraer_caracteristicas_completas(img_procesada, mascara_binaria)
+        
+        # PASO 7: Crear DataFrame con las caracteristicas
         df_caracteristicas = pd.DataFrame([caracteristicas])
         
-        # 8. Limpiar archivos temporales
+        # PASO 8: Limpiar archivos temporales
         temp_img_path.unlink()
         temp_npy_path.unlink()
         
@@ -116,11 +169,20 @@ class DagsterClient:
     
     def extraer_caracteristicas_completas(self, imagen: np.ndarray, mascara_binaria: np.ndarray) -> Dict[str, Any]:
         """
-        imagen: array (H, W, 3) - canales: [FLAIR, pre, post]
-        mascara_binaria: array (H, W) - 0 fondo, 1 tumor
+        Extrae caracteristicas radiomicas del tumor:
+        - Morfologicas: area, perimetro, circularidad
+        - Intensidad: media y minima post-contraste, percentil 95 FLAIR
+        - Textura: contraste GLCM (heterogeneidad)
+        
+        Args:
+            imagen: Array (H, W, 3) con canales [FLAIR, pre, post]
+            mascara_binaria: Array (H, W) con valores 0 (fondo) y 1 (tumor)
+        
+        Returns:
+            Diccionario con todas las caracteristicas extraidas
         """
         
-        # Si no hay tumor, devolver todo ceros
+        # CASO ESPECIAL: Si no hay tumor, devolver todo ceros
         if mascara_binaria.sum() == 0:
             return {
                 'area': 0,
@@ -132,34 +194,37 @@ class DagsterClient:
                 'textura_contraste': 0,
             }
         
-        # 1. MORFOMÉTRICAS
+        # SECCION 1: MORFOMETRICAS (forma y tamaño)
         labeled = label(mascara_binaria)
-        props = regionprops(labeled)[0]  # Tumor más grande
+        props = regionprops(labeled)[0]  # Tomar la region mas grande (tumor principal)
         
-        area = props.area
-        perimetro = props.perimeter
+        area = props.area  # Numero de pixeles que ocupa el tumor
+        perimetro = props.perimeter  # Longitud del borde del tumor
+        # Circularidad: 1 = circulo perfecto, <1 = irregular (tumores agresivos)
         circularidad = (4 * np.pi * area) / (perimetro ** 2) if perimetro > 0 else 0
         
-        # 2. INTENSIDAD POST-CONTRASTE (canal 2)
+        # SECCION 2: INTENSIDAD POST-CONTRASTE (canal 2)
         canal_post = imagen[:, :, 2]
         valores_post = canal_post[mascara_binaria > 0]
-        intensidad_media_post = float(valores_post.mean())
-        intensidad_minima_post = float(valores_post.min())
+        intensidad_media_post = float(valores_post.mean())  # Vascularizacion
+        intensidad_minima_post = float(valores_post.min())  # Necrosis
         
-        # 3. PERCENTIL 95 FLAIR (canal 0)
+        # SECCION 3: PERCENTIL 95 FLAIR (canal 0) - edema peritumoral
         canal_flair = imagen[:, :, 0]
         valores_flair = canal_flair[mascara_binaria > 0]
         percentil_95_flair = float(np.percentile(valores_flair, 95))
         
-        # 4. TEXTURA (sobre canal post)
-        minr, minc, maxr, maxc = props.bbox
-        rdi = canal_post[minr:maxr, minc:maxc]
+        # SECCION 4: TEXTURA (heterogeneidad) sobre canal post-contraste
+        minr, minc, maxr, maxc = props.bbox  # Obtener bounding box del tumor
+        rdi = canal_post[minr:maxr, minc:maxc]  # Recortar region de interes
         rdi_mask = mascara_binaria[minr:maxr, minc:maxc]
-        rdi = rdi * rdi_mask
+        rdi = rdi * rdi_mask  # Aplicar mascara
         
+        # Normalizar a 8 bits (0-255) si hay valores positivos
         if rdi.sum() > 0 and rdi.max() > 0:
             rdi = (rdi / rdi.max() * 255).astype(np.uint8)
         
+        # Calcular matriz de co-ocurrencia (GLCM) y extraer contraste
         if rdi.sum() > 0 and rdi.shape[0] > 1 and rdi.shape[1] > 1:
             try:
                 glcm = graycomatrix(rdi, distances=[1], angles=[0], levels=256, symmetric=True)
@@ -182,30 +247,38 @@ class DagsterClient:
     
     def calcular_urgencia(self, caracteristicas_df: pd.DataFrame, datos_clinicos: Dict[str, Any]) -> float:
         """
-        Combina características del tumor con datos clínicos para predecir urgencia
-        Usa el modelo guardado en datos_procesados/modelo_urgencia/modelo_urgencia.pkl
+        Predice el nivel de urgencia clinica combinando:
+        - Caracteristicas radiomicas del tumor (7 variables)
+        - Datos clinicos del paciente (edad y grado tumoral)
+        
+        Args:
+            caracteristicas_df: DataFrame con las 7 caracteristicas tumorales
+            datos_clinicos: Diccionario con edad y grado histologico
+        
+        Returns:
+            Probabilidad de urgencia (valor entre 0 y 1)
         """
 
+        # Verificar si hay tumor (area > 0)
         if 'area' in caracteristicas_df.columns:
             area = caracteristicas_df['area'].iloc[0]
         if area == 0 or pd.isna(area):
-            return 0.0
+            return 0.0  # Sin tumor = sin urgencia
         
-        # 1. Cargar el modelo de urgencia
+        # PASO 1: Cargar el modelo de urgencia entrenado
         DATOS_PROCESADOS = src_path.parent / "datos_procesados"
-        modelo_path =  DATOS_PROCESADOS / "modelo_urgencia" / "modelo_urgencia.pkl"
+        modelo_path = DATOS_PROCESADOS / "modelo_urgencia" / "modelo_urgencia.pkl"
         
         if not modelo_path.exists():
             raise FileNotFoundError(f"Modelo de urgencia no encontrado en {modelo_path}")
         
         data = joblib.load(modelo_path)
-        modelo = data['modelo']  # El modelo está dentro de la clave 'modelo'
+        modelo = data['modelo']  # Extraer modelo de regresion logistica
         
-        # Crear DataFrame con las 9 variables en el orden correcto
-        # Usar un diccionario con todas las variables
+        # PASO 2: Preparar diccionario con todas las caracteristicas
         features_dict = {}
         
-        # Variables de características del tumor
+        # Caracteristicas del tumor (7 variables)
         features_dict['area'] = caracteristicas_df['area'].iloc[0]
         features_dict['perimetro'] = caracteristicas_df['perimetro'].iloc[0]
         features_dict['circularidad'] = caracteristicas_df['circularidad'].iloc[0]
@@ -214,10 +287,10 @@ class DagsterClient:
         features_dict['percentil_95_flair'] = caracteristicas_df['percentil_95_flair'].iloc[0]
         features_dict['textura_contraste'] = caracteristicas_df['textura_contraste'].iloc[0]
         
-        # Variables de datos clínicos
+        # Variables clinicas: edad (con valor por defecto 55)
         features_dict['age_at_initial_pathologic'] = datos_clinicos.get('age_at_initial_pathologic', 55) or 55
         
-        # Convertir grado histológico a valor numérico
+        # Convertir grado histologico (texto) a valor numerico (1-4)
         grado = datos_clinicos.get('neoplasm_histologic_grade')
         if grado == "Grado IV" or grado == "IV":
             features_dict['neoplasm_histologic_grade'] = 4
@@ -228,17 +301,21 @@ class DagsterClient:
         elif grado == "Grado I" or grado == "I":
             features_dict['neoplasm_histologic_grade'] = 1
         else:
-            features_dict['neoplasm_histologic_grade'] = 2  # Valor por defecto
+            features_dict['neoplasm_histologic_grade'] = 2  # Valor por defecto: Grado II
         
-        # Crear DataFrame con el orden correcto de columnas
-        columnas_ordenadas = ['area', 'perimetro', 'circularidad', 'intensidad_media_post', 
-                            'intensidad_minima_post', 'percentil_95_flair', 'textura_contraste', 
-                            'age_at_initial_pathologic', 'neoplasm_histologic_grade']
+        # PASO 3: Ordenar columnas (mismo orden que en entrenamiento)
+        columnas_ordenadas = [
+            'area', 'perimetro', 'circularidad', 
+            'intensidad_media_post', 'intensidad_minima_post', 
+            'percentil_95_flair', 'textura_contraste', 
+            'age_at_initial_pathologic', 'neoplasm_histologic_grade'
+        ]
         
         features_completas = pd.DataFrame([features_dict])[columnas_ordenadas]
         
-        # 4. Hacer predicción
-        urgencia = modelo.predict_proba(features_completas)[0, 1]  # Probabilidad de clase positiva
+        # PASO 4: Predecir probabilidad de urgencia
+        # predict_proba devuelve [prob_clase_0, prob_clase_1]
+        urgencia = modelo.predict_proba(features_completas)[0, 1]
         
         return float(urgencia)
     
@@ -246,31 +323,40 @@ class DagsterClient:
                                 caracteristicas_df: pd.DataFrame, 
                                 urgencia: float) -> str:
         """
-        Guarda los resultados del procesamiento de imagen
+        Guarda los resultados del procesamiento de imagen en archivos.
+        
+        Args:
+            session_id: Identificador de la sesion
+            mascara: Mascara binaria del tumor
+            caracteristicas_df: DataFrame con caracteristicas tumorales
+            urgencia: Probabilidad de urgencia (0-1)
+        
+        Returns:
+            Ruta del directorio con los archivos guardados
         """
         temp_dir = Path(tempfile.gettempdir()) / f"mrai_session_{session_id}"
         temp_dir.mkdir(exist_ok=True)
         
-        # Guardar máscara
+        # Guardar mascara en formato numpy
         np.save(temp_dir / "mascara.npy", mascara)
         
-        # Guardar características
+        # Guardar caracteristicas en CSV
         caracteristicas_df.to_csv(temp_dir / "caracteristicas_tumor.csv", index=False)
         
-        # Guardar urgencia
+        # Guardar nivel de urgencia en archivo de texto
         with open(temp_dir / "nivel_urgencia.txt", "w", encoding="utf-8") as f:
             f.write(f"Nivel de urgencia: {urgencia:.3f}\n")
-            f.write(f"Fecha del análisis: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write("Interpretación clínica:\n")
+            f.write(f"Fecha del analisis: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("Interpretacion clinica:\n")
             if urgencia < 0.3:
                 f.write("- BAJA URGENCIA: Seguimiento programado en consultas externas\n")
-                f.write("- Recomendación: Revisión en 3-6 meses\n")
+                f.write("- Recomendacion: Revision en 3-6 meses\n")
             elif urgencia < 0.7:
-                f.write("- URGENCIA MODERADA: Priorizar atención en consulta\n")
-                f.write("- Recomendación: Evaluación en menos de 2 semanas\n")
+                f.write("- URGENCIA MODERADA: Priorizar atencion en consulta\n")
+                f.write("- Recomendacion: Evaluacion en menos de 2 semanas\n")
             else:
-                f.write("- ALTA URGENCIA: Requiere intervención inmediata\n")
-                f.write("- Recomendación: Derivación a urgencias neuroquirúrgicas\n")
+                f.write("- ALTA URGENCIA: Requiere intervencion inmediata\n")
+                f.write("- Recomendacion: Derivacion a urgencias neuroquirurgicas\n")
         
         return str(temp_dir)
     
@@ -279,22 +365,32 @@ class DagsterClient:
                             urgencia: float,
                             datos_clinicos: Dict) -> str:
         """
-        Guarda todos los datos generados en una carpeta temporal
-        Crea un CSV completo combinando características y datos clínicos
+        Guarda todos los datos generados (version completa con datos clinicos).
+        Crea un CSV unificado combinando caracteristicas y datos clinicos.
+        
+        Args:
+            session_id: Identificador de la sesion
+            mascara: Mascara binaria del tumor
+            caracteristicas_df: DataFrame con caracteristicas tumorales
+            urgencia: Probabilidad de urgencia
+            datos_clinicos: Diccionario con datos clinicos del paciente
+        
+        Returns:
+            Ruta del directorio con todos los archivos
         """
         temp_dir = Path(tempfile.gettempdir()) / f"mrai_session_{session_id}"
         temp_dir.mkdir(exist_ok=True)
         
-        # 1. Guardar máscara
+        # 1. Guardar mascara
         np.save(temp_dir / "mascara.npy", mascara)
         
-        # 2. Guardar características del tumor
+        # 2. Guardar caracteristicas del tumor
         caracteristicas_df.to_csv(temp_dir / "caracteristicas_tumor.csv", index=False)
         
-        # 3. Crear CSV completo (características + datos clínicos)
+        # 3. Crear CSV completo (caracteristicas + datos clinicos + urgencia)
         df_completo = caracteristicas_df.copy()
         
-        # Añadir datos clínicos
+        # Añadir datos clinicos como columnas adicionales
         if datos_clinicos:
             for key, value in datos_clinicos.items():
                 if value is not None:
@@ -311,46 +407,62 @@ class DagsterClient:
         # 4. Guardar nivel de urgencia en texto legible
         with open(temp_dir / "nivel_urgencia.txt", "w", encoding="utf-8") as f:
             f.write("=== NIVEL DE URGENCIA ===\n")
-            f.write(f"Puntuación: {urgencia:.3f} / 1.000\n\n")
+            f.write(f"Puntuacion: {urgencia:.3f} / 1.000\n\n")
             if urgencia < 0.3:
-                f.write("Clasificación: 🟢 URGENCIA BAJA\n")
-                f.write("Recomendación: Seguimiento programado en consultas externas\n")
+                f.write("Clasificacion: [BAJA] URGENCIA BAJA\n")
+                f.write("Recomendacion: Seguimiento programado en consultas externas\n")
                 f.write("Plazo sugerido: 3-6 meses\n")
             elif urgencia < 0.7:
-                f.write("Clasificación: 🟡 URGENCIA MODERADA\n")
-                f.write("Recomendación: Priorizar atención en consulta especializada\n")
+                f.write("Clasificacion: [MODERADA] URGENCIA MODERADA\n")
+                f.write("Recomendacion: Priorizar atencion en consulta especializada\n")
                 f.write("Plazo sugerido: Menos de 2 semanas\n")
             else:
-                f.write("Clasificación: 🔴 ALTA URGENCIA\n")
-                f.write("Recomendación: Intervención neuroquirúrgica inmediata\n")
+                f.write("Clasificacion: [ALTA] ALTA URGENCIA\n")
+                f.write("Recomendacion: Intervencion neuroquirurgica inmediata\n")
                 f.write("Plazo sugerido: 24-48 horas\n")
         
-        # 5. Guardar datos clínicos originales
+        # 5. Guardar datos clinicos originales
         df_clinicos = pd.DataFrame([datos_clinicos])
         df_clinicos.to_csv(temp_dir / "datos_clinicos.csv", index=False, na_rep='NULL')
         
-        # 6. Crear README
+        # 6. Crear archivo README con descripcion de los archivos
         with open(temp_dir / "README.txt", "w", encoding="utf-8") as f:
             f.write("=== INFORME COMPLETO MRAI ===\n\n")
-            f.write(f"ID de sesión: {session_id}\n")
+            f.write(f"ID de sesion: {session_id}\n")
             f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             f.write("ARCHIVOS CONTENIDOS:\n")
-            f.write("1. mascara.npy - Máscara de segmentación del tumor\n")
-            f.write("2. caracteristicas_tumor.csv - Características radiomicas extraídas\n")
-            f.write("3. datos_completos.csv - Características + datos clínicos + urgencia\n")
-            f.write("4. nivel_urgencia.txt - Nivel de urgencia clínica (0-1) interpretado\n")
-            f.write("5. datos_clinicos.csv - Datos demográficos y clínicos del paciente\n")
+            f.write("1. mascara.npy - Mascara de segmentacion del tumor\n")
+            f.write("2. caracteristicas_tumor.csv - Caracteristicas radiomicas extraidas\n")
+            f.write("3. datos_completos.csv - Caracteristicas + datos clinicos + urgencia\n")
+            f.write("4. nivel_urgencia.txt - Nivel de urgencia clinica interpretado\n")
+            f.write("5. datos_clinicos.csv - Datos demograficos y clinicos del paciente\n")
         
         return str(temp_dir)
     
     def limpiar_datos_sesion(self, session_id: str):
-        """Elimina todos los datos temporales de una sesión"""
+        """
+        Elimina todos los datos temporales de una sesion.
+        Importante para garantizar la privacidad del paciente.
+        
+        Args:
+            session_id: Identificador de la sesion a eliminar
+        """
         temp_dir = Path(tempfile.gettempdir()) / f"mrai_session_{session_id}"
         if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+            shutil.rmtree(temp_dir)  # Eliminacion recursiva
 
 
-# Instancia global del cliente
+# =============================================================================
+# INSTANCIA GLOBAL DEL CLIENTE (SINGLETON)
+# =============================================================================
+
 @st.cache_resource
 def get_dagster_client():
+    """
+    Decorador de Streamlit que mantiene el cliente en memoria cache.
+    Evita recrear el cliente en cada interaccion del usuario.
+    
+    Returns:
+        Instancia unica de DagsterClient (patron singleton)
+    """
     return DagsterClient(base_url="http://localhost:3000")

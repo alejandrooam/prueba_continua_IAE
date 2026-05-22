@@ -1,184 +1,226 @@
-import torch
-import torch.optim as optim #Herramientas de optimización de pesos
-from torch.utils.data import DataLoader, Dataset #Para manejar bien datasets
-import numpy as np
-import pandas as pd
-from pathlib import Path 
-from .modelo_unet import UNet #Nuestro modelo ya definido
+# Este script implementa el entrenamiento de una red FPN para segmentación de imágenes médicas.
+# La pirámide de características permite detectar objetos a diferentes escalas,
+# combinando contexto global (escala 1/32) con detalles finos (escala 1/4).
 
-class MRIDataset(Dataset):  #Creamos la clase de Dataset para trabajar más eficientemente
-    def __init__(self, csv_path, images_dir, logger=None): #Contiene la ruta al archivo csv y la carpeta donde están las imágenes y máscaras
-        self.data = pd.read_csv(csv_path) #Lee el csv y lo convierte en un dataframe
-        self.images_dir = Path(images_dir) #Guarda la ruta de la carpeta de imágenes
-        self.logger = logger  # ← Guarda logger
-        self._diagnostic_done = False
+# LIBRERÍAS NECESARIAS
+import torch  # Deep learning: tensores, GPU...
+import torch.optim as optim  # Optimizadores: Adam, SGD, Adamax para actualizar pesos
+from torch.utils.data import DataLoader, Dataset  # Carga eficiente de datos en batches y clase base para datasets
+import numpy as np  # Computación numérica: arrays, carga .npy, métricas
+import pandas as pd  # Manipulación de dataframes: lectura de CSV
+from pathlib import Path  # Manejo de rutas de archivos
+from .modelo_fpn import FPN  # Modelo de segmentación
 
-    def __len__(self): #Devuelve cuantos elementos hay en el dataset (importante para ver cuanto hay que iterar)
+
+# CLASE MRIDATASET - MANEJO DEL DATASET
+class MRIDataset(Dataset):
+    """
+    Dataset personalizado para cargar imágenes y máscaras de segmentación.
+    """
+    
+    def __init__(self, csv_path, images_dir):
+        """
+        Inicializa el dataset.
+        
+        Args:
+            csv_path: Ruta al archivo CSV con columnas 'ruta_procesada' y 'ruta_mascara'
+            images_dir: Carpeta donde están almacenadas las imágenes .npy
+            logger: Objeto para logging opcional
+        """
+        self.data = pd.read_csv(csv_path)           # Lee CSV y convierte a DataFrame de pandas
+        self.images_dir = Path(images_dir)          # Guarda ruta como objeto Path
+        self._diagnostic_done = False               # Bandera para diagnóstico único
+
+    def __len__(self):
+        """
+        Devuelve el número total de muestras en el dataset.r.
+        """
         return len(self.data)
 
     def __getitem__(self, idx):
-        row = self.data.iloc[idx] #Saca la fila idx de la tabla
-        ruta_procesada = Path(row['ruta_procesada']).name
-        ruta_mascara = Path(row['ruta_mascara']).name
-        img = np.load(self.images_dir / ruta_procesada)  #row['ruta_procesada'] te da la ruta de la imágen y carga esa imágen  # (Alto, Ancho, 3)
-        mask = np.load(self.images_dir / ruta_mascara)   #Lo mismo pero para la máscara # (Alto, Ancho)
+        """
+        Carga y preprocesa una muestra específica del dataset.
         
-        # 🔍 DIAGNÓSTICO (una sola vez)
-        if not self._diagnostic_done and self.logger:
-            self.logger.log(f"🔍 DIAGNÓSTICO DE MÁSCARA:")
-            self.logger.log(f"   dtype: {mask.dtype}")
-            self.logger.log(f"   min: {mask.min()}, max: {mask.max()}")
-            self.logger.log(f"   valores únicos: {np.unique(mask)}")
-            self._diagnostic_done = True
+        Args:
+            idx: Índice de la muestra a cargar
+            
+        Returns:
+            img: Tensor de imagen (Canales, Alto, Ancho)
+            mask: Tensor de máscara (1, Alto, Ancho)
+        """
+        row = self.data.iloc[idx]                               # Obtiene fila por índice
+        ruta_procesada = Path(row['ruta_procesada']).name       # Extrae nombre del archivo de imagen
+        ruta_mascara = Path(row['ruta_mascara']).name           # Extrae nombre del archivo de máscara
         
-        # ✅ CONVIERTE a 0/1 si es necesario
+        # Carga las matrices .npy con NumPy
+        img = np.load(self.images_dir / ruta_procesada)         # (Alto, Ancho, 3) - imagen RGB
+        mask = np.load(self.images_dir / ruta_mascara)          # (Alto, Ancho) - máscara binaria
+        
+        
+        # Convierte la máscara a valores 0/1 si es necesario
+        # (algunas máscaras pueden tener valores >1 como 255)
         if mask.max() > 1:
-            mask = (mask > 0).astype(np.float32)
-            if self.logger and not hasattr(self, '_conversion_logged'):
-                self.logger.log(f"✅ Máscara convertida de {mask.max()} a 0/1")
-
-        # Convertir a tensor: (Capa, Alto, Ancho)
-        img = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1) #Convierte las imágenes en tensor, el permute es para que pase de (Alto,Ancho,Canal) a (Canal,Alto,Ancho)
-        mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0) #Unsqueeze añade una dimensión al principio para indicar que la máscara tiene un solo canal
+            mask = (mask > 0).astype(np.float32) # devuelve 0-1
         
-        return img, mask  #Se queda con la imagen y su máscara
+        # Convertir a tensores de PyTorch con formato correcto
+        # img: (Alto, Ancho, Canales) → (Canales, Alto, Ancho) con permute
+        img = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1)
+        
+        # mask: (Alto, Ancho) → (1, Alto, Ancho) con unsqueeze (añade dimensión canal=1)
+        mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0)
+        
+        return img, mask
 
-def entrenar_unet(train_csv, val_csv, images_dir, pesos_clase_path, epochs=1, lr=5e-5, batch_size=8, logger=None):
-    """Entrena U-Net con early stopping basado en F1-Score"""
+
+# ============================================================================
+# FUNCIÓN DE ENTRENAMIENTO - UNET (VERSIÓN COMENTADA)
+# ============================================================================
+
+def entrenar_fpn(train_csv, val_csv, images_dir, pesos_clase_path, 
+                  epochs=1, lr=5e-5, batch_size=8):
+    """
+    Entrena el modelo FPN con criterio de parada basado en F1-Score.
     
-    if logger:
-        logger.log(f"🚀 Iniciando entrenamiento U-Net")
-        logger.log(f"📁 Train CSV: {train_csv}")
-        logger.log(f"📁 Val CSV: {val_csv}")
-        logger.log(f"📁 Images dir: {images_dir}")
-        logger.log(f"⚙️ Epochs: {epochs}, LR: {lr}, Batch size: {batch_size}")
+    Args:
+        train_csv: Ruta al CSV con datos de entrenamiento
+        val_csv: Ruta al CSV con datos de validación
+        images_dir: Carpeta con imágenes .npy
+        pesos_clase_path: Ruta al archivo con pesos de clase (para desbalanceo)
+        epochs: Número máximo de épocas de entrenamiento
+        lr: Learning rate (tasa de aprendizaje)
+        batch_size: Tamaño del lote
     
-    # Cargar datasets
-    if logger:
-        logger.log("📂 Cargando datasets...")
+    Returns:
+        model: Modelo entrenado (con los mejores pesos encontrados)
+    """
     
-    train_dataset = MRIDataset(train_csv, images_dir, logger=logger)
-    val_dataset = MRIDataset(val_csv, images_dir, logger=logger)
+    # 1. CREAR DATASETS Y DATALOADERS
+    train_dataset = MRIDataset(train_csv, images_dir)
+    val_dataset = MRIDataset(val_csv, images_dir)
     
+    # DataLoader: Distribuye los datos en lotes, shuffle=True mezcla para entrenamiento
+    # Devuelve tensores de la forma: (n_lotes,canales, alto, ancho)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
-    if logger:
-        logger.log(f"✅ Dataset cargado: {len(train_dataset)} train, {len(val_dataset)} val")
-        logger.log(f"📦 Batches por época: {len(train_loader)}")
+    # 2. INICIALIZAR MODELO
+    model = FPN()                               # Instancia del modelo FPN
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # GPU si está disponible
+    model.to(device)                            # Mueve el modelo a GPU/CPU
     
-    # Modelo con logger
-    model = UNet(entrada=3, salida=1, logger=logger)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
+    # 3. CARGAR PESOS DE CLASE (para pérdida balanceada)
+    pesos_clase = np.load(pesos_clase_path)     # Carga array con pesos [peso_fondo, peso_objeto]
+    pos_weight = torch.tensor([pesos_clase[1]], dtype=torch.float32).to(device) # peso para tumor
     
-    if logger:
-        logger.log(f"💻 Dispositivo: {device}")
-        if device.type == 'cuda':
-            logger.log(f"🎮 GPU: {torch.cuda.get_device_name(0)}")
-    
-    # Cargar pesos de clase
-    pesos_clase = np.load(pesos_clase_path)
-    pos_weight = torch.tensor([pesos_clase[1]], dtype=torch.float32).to(device)
-    #pos_weight = torch.tensor([175.0], dtype=torch.float32).to(device)
-    
-    if logger:
-        logger.log(f"⚖️ Pesos de clase - Sano: {pesos_clase[0]:.3f}, Tumor: {pesos_clase[1]:.3f}")
-        logger.log(f"⚖️ Pos_weight usado: {pos_weight.item():.1f}")
+    # 4. DEFINIR FUNCIONES DE PÉRDIDA 
     
     def dice_loss(inputs, target):
-        inputs = torch.sigmoid(inputs)
-        intersection = (target * inputs).sum()
-        union = target.sum() + inputs.sum()
-        return 1 - (2 * intersection + 1.0) / (union + 1.0)
-
+        """
+        Dice Loss: Mide solapamiento entre predicción y máscara real.
+        Fórmula: 1 - (2 * intersección + 1) / (unión + 1)
+        El +1 suaviza para evitar división por cero.
+        """
+        inputs = torch.sigmoid(inputs)          # Convierte logits a probabilidades
+        intersection = (target * inputs).sum()  # Área de intersección (verdaderos positivos)
+        union = target.sum() + inputs.sum()     # Área total predicha + real
+        return 1 - (2 * intersection + 1.0) / (union + 1.0) # fórmula
+    
     def bce_dice_loss(inputs, target):
-        bce = torch.nn.BCEWithLogitsLoss()(inputs, target)  # ← SIN pos_weight
-        dice = dice_loss(inputs, target)
-        return bce + dice
+        """
+        Pérdida combinada: Binary Cross Entropy + Dice Loss.
+        BCE evalúa píxel a píxel, Dice evalúa solapamiento global.
+        La combinación suele dar mejores resultados que cada una por separado.
+        """
+        bce = torch.nn.BCEWithLogitsLoss()(inputs, target)  # Pérdida binaria con logits
+        dice = dice_loss(inputs, target)                    # Pérdida Dice
+        return bce + dice                                   # Suma de ambas
+    
+    criterion = bce_dice_loss                   # Función de pérdida a usar
 
-    criterion = bce_dice_loss
-    #criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    optimizer = optim.Adamax(model.parameters(), lr=lr, weight_decay=1e-3)
+
+    #  5. OPTIMIZADOR 
+    # Adamax: Variante de Adam que usa norma infinito, mejor para casa binario
+    optimizer = optim.Adamax(model.parameters(), lr=lr)
     
-    # ========== EARLY STOPPING BASADO EN F1 ==========
-    best_f1 = 0.0
-    patience_counter = 0
-    patience = 7
-    best_model_state = None
+    # 6. CONFIGURACIÓN DE EARLY STOPPING 
+    best_f1 = 0.0           # Mejor F1-Score alcanzado
+    patience_counter = 0    # Contador de épocas sin mejora
+    patience = 7            # Épocas a esperar antes de parar. Si en 7 épocas no mejora el f1, no espero más.
+    best_model_state = None # Almacena los mejores pesos
     
+    # 7. BUCLE DE ENTRENAMIENTO POR ÉPOCAS
     for epoch in range(epochs):
-        if logger:
-            logger.log(f"\n{'='*50}")
-            logger.log(f"📈 Época {epoch+1}/{epochs}")
-            logger.log(f"{'='*50}")
         
-        # ========== ENTRENAMIENTO ==========
-        model.train()
+        # FASE DE ENTRENAMIENTO
+        model.train()                               # Modo entrenamiento (activa dropout, batch norm)
         train_loss = 0
-        batch_count = 0
         
         for imgs, masks in train_loader:
-            imgs, masks = imgs.to(device), masks.to(device)
-            optimizer.zero_grad()
-            outputs = model(imgs)
-            loss = criterion(outputs, masks)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
-            batch_count += 1
+            imgs = imgs.to(device)                  # Mueve imágenes a GPU/CPU
+            masks = masks.to(device)                # Mueve máscaras a GPU/CPU
             
-            # Log cada 50 batches
-            if logger and batch_count % 50 == 0:
-                logger.log(f"   🔄 Batch {batch_count}/{len(train_loader)} - Loss: {loss.item():.4f}")
+            optimizer.zero_grad()                   # Reinicia gradientes de la época anterior
+            outputs = model(imgs)                   # Forward pass: imagen → predicción
+            loss = criterion(outputs, masks)        # Calcula pérdida entre predicción y máscara real
+            loss.backward()                         # Backward pass: calcula gradientes
+            optimizer.step()                        # Actualiza pesos del modelo
+            
+            train_loss += loss.item()               # Acumula pérdida
+            
+        avg_train_loss = train_loss / len(train_loader)  # Pérdida promedio de la época
         
-        avg_train_loss = train_loss / len(train_loader)
-        
-        # ========== VALIDACIÓN CON MÉTRICAS REALES ==========
-        model.eval()
+        #  FASE DE VALIDACIÓN 
+        model.eval()                      # Modo evaluación (desactiva dropout)
         val_loss = 0
         
-        # Almacenar todas las predicciones para calcular métricas
+        # Almacenar todas las predicciones y valores reales para calcular métricas
         todas_predicciones = []
         todas_reales = []
         
-        with torch.no_grad():
+        with torch.no_grad():                 # Desactiva cálculo de gradientes (ahorra memoria)
             for imgs, masks in val_loader:
-                imgs, masks = imgs.to(device), masks.to(device)
+                imgs = imgs.to(device)
+                masks = masks.to(device)
                 outputs = model(imgs)
                 val_loss += criterion(outputs, masks).item()
                 
-                # Guardar para métricas
+                # Convierte logits a probabilidades con sigmoide
                 probs = torch.sigmoid(outputs)
+                
+                # Aplana tensores para tener arrays 1D de píxeles: (128,128,1)
                 preds_flat = probs.cpu().numpy().flatten()
                 masks_flat = masks.cpu().numpy().flatten()
-                todas_predicciones.extend(preds_flat)
+                
+                todas_predicciones.extend(preds_flat)  # extend añade todos los elementos, no las listas
                 todas_reales.extend(masks_flat)
         
         avg_val_loss = val_loss / len(val_loader)
         
-        # Convertir a arrays
-        y_true = np.array(todas_reales)
-        y_prob = np.array(todas_predicciones)
+        # CÁLCULO DE MÉTRICAS 
+        y_true = np.array(todas_reales)            # Valores reales (0 o 1)
+        y_prob = np.array(todas_predicciones)      # Probabilidades predichas
         
-        # Probar diferentes umbrales para encontrar el mejor F1
-        umbrales = np.arange(0.3, 0.8, 0.05)
+        # Prueba diferentes umbrales para encontrar el mejor F1-Score
+        umbrales = np.arange(0.3, 0.8, 0.05)       # Umbrales de 0.3 a 0.75
         mejor_f1_epoch = 0
         mejor_umbral_epoch = 0.5
         mejor_sens_epoch = 0
         mejor_prec_epoch = 0
         
         for umbral in umbrales:
+            # Clasifica según umbral: > umbral = 1 (objeto), ≤ umbral = 0 (fondo)
             y_pred = (y_prob > umbral).astype(int)
             y_true_bin = y_true.astype(int)
             
-            tp = np.logical_and(y_pred == 1, y_true_bin == 1).sum()
-            fp = np.logical_and(y_pred == 1, y_true_bin == 0).sum()
-            fn = np.logical_and(y_pred == 0, y_true_bin == 1).sum()
+            # Calcular matriz de confusión
+            tp = np.logical_and(y_pred == 1, y_true_bin == 1).sum()  # Verdaderos positivos
+            fp = np.logical_and(y_pred == 1, y_true_bin == 0).sum()  # Falsos positivos
+            fn = np.logical_and(y_pred == 0, y_true_bin == 1).sum()  # Falsos negativos
             
-            sensibilidad = tp / (tp + fn + 1e-8)
-            precision = tp / (tp + fp + 1e-8)
-            f1 = 2 * (precision * sensibilidad) / (precision + sensibilidad + 1e-8)
+            # Métricas
+            sensibilidad = tp / (tp + fn + 1e-8)    # Recall = TP/(TP+FN) - qué % de objetos detectó
+            precision = tp / (tp + fp + 1e-8)       # Precisión = TP/(TP+FP) - qué % de detecciones son correctas
+            f1 = 2 * (precision * sensibilidad) / (precision + sensibilidad + 1e-8)  # Media armónica
             
             if f1 > mejor_f1_epoch:
                 mejor_f1_epoch = f1
@@ -186,56 +228,49 @@ def entrenar_unet(train_csv, val_csv, images_dir, pesos_clase_path, epochs=1, lr
                 mejor_sens_epoch = sensibilidad
                 mejor_prec_epoch = precision
         
-        if logger:
-            logger.log(f"\n📊 Resultados Época {epoch+1}:")
-            logger.log(f"   Train Loss: {avg_train_loss:.4f}")
-            logger.log(f"   Val Loss:   {avg_val_loss:.4f}")
-            logger.log(f"   📈 Mejor F1-Score: {mejor_f1_epoch:.4f} (umbral={mejor_umbral_epoch:.2f})")
-            logger.log(f"      Sensibilidad: {mejor_sens_epoch:.4f}")
-            logger.log(f"      Precisión:    {mejor_prec_epoch:.4f}")
-        
-        # ========== EARLY STOPPING BASADO EN F1 ==========
+        # 8. EARLY STOPPING
+        # Si mejoró el F1, guarda los pesos y resetea contador
         if mejor_f1_epoch > best_f1:
             best_f1 = mejor_f1_epoch
             patience_counter = 0
-            best_model_state = model.state_dict().copy()
-            
-            if logger:
-                logger.log(f"💾 Mejor modelo guardado! (F1-Score: {best_f1:.4f})")
+            best_model_state = model.state_dict().copy()  # Copia los mejores pesos
         else:
-            patience_counter += 1
+            patience_counter += 1  # No mejoró, incrementa contador
             
-            if logger:
-                logger.log(f"⚠️ Sin mejora de F1 por {patience_counter}/{patience} épocas")
-            
+            # Si superó la paciencia, detiene entrenamiento (por defecto, 7 épocas de paciencia)
             if patience_counter >= patience:
-                if logger:
-                    logger.log(f"\n{'='*50}")
-                    logger.log(f"🛑 EARLY STOPPING activado en época {epoch+1}")
-                    logger.log(f"   Mejor F1-Score logrado: {best_f1:.4f}")
-                    logger.log(f"   Restaurando mejor modelo...")
-                    logger.log(f"{'='*50}")
-                
-                # Cargar el mejor modelo
-                model.load_state_dict(best_model_state)
-                break
+                model.load_state_dict(best_model_state)    # Carga los mejores pesos
+                break  # Sale del bucle de entrenamiento
     
-    if logger:
-        logger.log(f"\n✅ Entrenamiento completado!")
-        logger.log(f"🏆 Mejor F1-Score: {best_f1:.4f}")
+    return model  # Devuelve el modelo entrenado
+
+# FUNCIÓN PARA ENCONTRAR MEJOR UMBRAL
+
+def encontrar_mejor_umbral(model, val_csv, images_dir, device='cpu', batch_size=8, logger=None):
+    """
+    Encuentra el umbral óptimo para binarizar las predicciones.
+    El umbral óptimo es el que maximiza el F1-Score en datos de validación.
     
-    return model
-
-
-def encontrar_mejor_umbral(model, val_csv, images_dir,device='cpu',batch_size=8, logger=None):
+    Args:
+        model: Modelo entrenado
+        val_csv: CSV con datos de validación
+        images_dir: Carpeta con imágenes
+        device: 'cuda' o 'cpu'
+        batch_size: Tamaño del lote
+        logger: Objeto para logging
+    
+    Returns:
+        mejor_umbral: Valor de umbral que maximiza F1 (ej: 0.45)
     """
-    Encuentra el mejor umbral usando datos de validación
-    """
+    
+    # Crear dataset y dataloader
     val_dataset = MRIDataset(val_csv, images_dir, logger=logger)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) #Aquí el orden no afecta así que lo ponemos en False
-    model.eval()
+    # shuffle=False porque el orden no importa para evaluación
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
-    # Almacenar todas las predicciones y realidades
+    model.eval()  # Modo evaluación
+    
+    # Almacenar todas las predicciones
     todas_predicciones = []
     todas_reales = []
     
@@ -243,50 +278,39 @@ def encontrar_mejor_umbral(model, val_csv, images_dir,device='cpu',batch_size=8,
         for imgs, masks in val_loader:
             imgs = imgs.to(device)
             logits = model(imgs)
-            outputs = torch.sigmoid(logits)
+            probs = torch.sigmoid(logits)  # Logits → probabilidades (0-1)
             
-            # Aplanar para tener todos los píxeles
-            preds_flat = outputs.cpu().numpy().flatten() #Aplanar la matriz para tener un solo vector
+            # Aplanar: (batch, canales, H, W) → (batch*H*W,)
+            preds_flat = probs.cpu().numpy().flatten()
             masks_flat = masks.cpu().numpy().flatten()
             
-            todas_predicciones.extend(preds_flat) #Esto es una lista con todos los píxeles
+            todas_predicciones.extend(preds_flat)
             todas_reales.extend(masks_flat)
     
-    # Convertir a arrays
-    y_true = np.array(todas_reales) #Con esto lo transformamos en array para poder trabajar con ellos
+    # Convertir a arrays de NumPy
+    y_true = np.array(todas_reales)
     y_prob = np.array(todas_predicciones)
-
-
-    if logger:
-        logger.log(f"\n📊 Estadísticas del dataset de validación:")
-        total_pixeles = len(y_true)
-        pixeles_tumor = y_true.sum()
-        pixeles_sano = total_pixeles - pixeles_tumor
-        logger.log(f"   Total píxeles: {total_pixeles:,}")
-        logger.log(f"   Píxeles con tumor: {pixeles_tumor:,} ({pixeles_tumor/total_pixeles*100:.2f}%)")
-        logger.log(f"   Píxeles sanos: {pixeles_sano:,} ({pixeles_sano/total_pixeles*100:.2f}%)")
-        logger.log(f"   Rango predicciones: [{y_prob.min():.4f}, {y_prob.max():.4f}]")
-
-
+    total_pixeles = len(y_true)
     
     # Probar diferentes umbrales
-    umbrales = np.arange(0.1, 0.95, 0.05)
+    umbrales = np.arange(0.1, 0.95, 0.05)  # De 0.1 a 0.9 en pasos de 0.05
     resultados = []
     
     for umbral in umbrales:
-        y_pred = (y_prob > umbral).astype(int)
-        y_true = y_true.astype(int)
-
-        tp = np.logical_and(y_pred == 1, y_true == 1).sum()
-        fp = np.logical_and(y_pred == 1, y_true == 0).sum()
-        fn = np.logical_and(y_pred == 0, y_true == 1).sum()
-
+        y_pred = (y_prob > umbral).astype(int)  # Binarizar según umbral
+        y_true_bin = y_true.astype(int)
+        
+        # Calcular matriz de confusión
+        tp = np.logical_and(y_pred == 1, y_true_bin == 1).sum()
+        fp = np.logical_and(y_pred == 1, y_true_bin == 0).sum()
+        fn = np.logical_and(y_pred == 0, y_true_bin == 1).sum()
+        
         # Métricas
-        sensibilidad = tp / (tp + fn + 1e-8)
-        precision = tp / (tp + fp + 1e-8)
+        sensibilidad = tp / (tp + fn + 1e-8)     # Recall
+        precision = tp / (tp + fp + 1e-8)        # Precisión
+        # Especificidad: TN/(TN+FP) - qué % de fondo clasificó correctamente
         especificidad = (total_pixeles - tp - fp - fn) / (total_pixeles - tp - fn + 1e-8)
         f1 = 2 * (precision * sensibilidad) / (precision + sensibilidad + 1e-8)
-        
         
         resultados.append({
             'umbral': umbral,
@@ -295,9 +319,10 @@ def encontrar_mejor_umbral(model, val_csv, images_dir,device='cpu',batch_size=8,
             'especificidad': especificidad,
             'f1': f1
         })
+    
     df_resultados = pd.DataFrame(resultados)
-
-    # Usar F1-Score para encontrar el mejor umbral
+    
+    # Encontrar umbral que maximiza F1-Score
     mejor_idx = df_resultados['f1'].idxmax()
     mejor_umbral = df_resultados.loc[mejor_idx, 'umbral']
     mejor_f1 = df_resultados.loc[mejor_idx, 'f1']
@@ -305,43 +330,4 @@ def encontrar_mejor_umbral(model, val_csv, images_dir,device='cpu',batch_size=8,
     mejor_prec = df_resultados.loc[mejor_idx, 'precision']
     mejor_espec = df_resultados.loc[mejor_idx, 'especificidad']
     
-    if logger:
-        logger.log(f"\n🎯 MEJOR UMBRAL (por F1-Score): {mejor_umbral:.3f}")
-        logger.log(f"   F1-Score: {mejor_f1:.4f}")
-        logger.log(f"   Sensibilidad: {mejor_sens:.4f}")
-        logger.log(f"   Precisión: {mejor_prec:.4f}")
-        logger.log(f"   Especificidad: {mejor_espec:.4f}")
-        
-        # Mostrar top 5
-        logger.log(f"\n📊 TOP 5 umbrales por F1-Score:")
-        top5 = df_resultados.nlargest(5, 'f1')[['umbral', 'f1', 'sensibilidad', 'precision']]
-        for _, row in top5.iterrows():
-            logger.log(f"   Umbral {row['umbral']:.2f}: F1={row['f1']:.4f}, Sens={row['sensibilidad']:.4f}, Prec={row['precision']:.4f}")
-    
     return mejor_umbral
-
-def diagnosticar_modelo(model, val_csv, images_dir, device, logger=None):
-    """Verifica que el modelo produce salidas razonables"""
-    model.eval()
-    val_dataset = MRIDataset(val_csv, images_dir)
-    val_loader = DataLoader(val_dataset, batch_size=10, shuffle=False)
-    with torch.no_grad():
-        for imgs, masks in val_loader:
-            imgs = imgs.to(device)
-            logits = model(imgs)
-            probs = torch.sigmoid(logits)
-            
-            if logger:
-                logger.log(f"🔍 DIAGNÓSTICO DEL MODELO:")
-                logger.log(f"   Logits - min: {logits.min():.4f}, max: {logits.max():.4f}")
-                logger.log(f"   Probs  - min: {probs.min():.4f}, max: {probs.max():.4f}")
-                logger.log(f"   Probs  - mean: {probs.mean():.4f}")
-                logger.log(f"   Probs  - std:  {probs.std():.4f}")
-                
-                # Mostrar histograma simple
-                bins = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-                hist = np.histogram(probs.cpu().numpy(), bins=bins)[0]
-                logger.log(f"   Histograma de predicciones:")
-                for i in range(len(bins)-1):
-                    logger.log(f"      {bins[i]:.1f}-{bins[i+1]:.1f}: {hist[i]:,} píxeles")
-            break

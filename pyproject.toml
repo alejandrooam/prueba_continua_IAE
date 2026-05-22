@@ -7,10 +7,10 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "albumentations>=2.0.8",
     "bs4>=0.0.2",
-    "dagster>=1.12.20",
-    "dagster-graphql>=1.12.20",
-    "dagster-webserver>=1.12.20",
+    "dagster>=1.13.5",
+    "dagster-webserver>=1.13.5",
     "dask[distributed]>=2026.1.2",
+    "dg>=0.0.3",
     "docx>=0.2.4",
     "flyte>=2.0.1",
     "h5py>=3.15.1",

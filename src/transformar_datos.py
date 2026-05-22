@@ -1,42 +1,52 @@
-import cv2
-import numpy as np
-import albumentations as A
+# TRANSFORMACIÓN DE DATOS
 
-# Definimos transformaciones que se aplicarán de forma idéntica a imagen y máscara
+# En esta parte preparamos las imágenes médicas para que una red neuronal pueda aprender 
+# a detectar tumores. Sigue este guión:
+
+# 1. Carga la imagen y la máscara en bruto
+# 2. Recorte: Quitamos el fondo negro, ahorra tiempo y espacio en la memoria.
+# 3. Normalización: todas mismo idioma, así no importa el hospital de procedencia de la resonancia.
+# 4. Aumentamos datos para que la red no memorice patrones.
+# 5. Redimensionamos: 256x256, la red neuronal necesita un tamaño concreto.
+
+# LIBRERÍAS NECESARIAS:
+import cv2   # para leer y manipular imágenes
+import numpy as np  # transforma las imágenes en matrices con las que podemos trabajar
+import albumentations as A  # para data augmentation, crear más variantes de las imágenes
+
+# 1. Función para transformar las imágenes
 transformacion_aumento = A.Compose([
-    A.RandomResizedCrop(size=(128,128), p=1.0),  # ← NUEVO
-    A.HorizontalFlip(p=0.5), # Volteo horizontal (50% de probabilidad)
-    A.VerticalFlip(p=0.5),
-    A.RandomRotate90(p=0.5), # Rotación de 90 grados (50% de probabilidad)
-    A.Transpose(p=0.5),
-    A.RandomBrightnessContrast(p=0.5),
-    A.RandomGamma(p=0.25),
-    A.Emboss(p=0.25),
-    A.Blur(p=0.01, blur_limit = 3),
-    A.OneOf([
-        A.ElasticTransform(p=0.5, alpha=120, sigma=120 * 0.05, alpha_affine=120 * 0.03),
-        A.GridDistortion(p=0.5),
-        A.OpticalDistortion(p=1, distort_limit=2, shift_limit=0.5)                  
-    ], p=0.8),
-    A.ShiftScaleRotate(shift_limit=0.01, scale_limit=0.04, rotate_limit=0, p=0.25), # Pequeños giros y zoom
-    A.Normalize(p=1.0),
+    A.HorizontalFlip(p=0.5), # Volteo horizontal, efecto espejo (50% de probabilidad)
+    A.RandomRotate90(p=0.5),	# Rotación de 90 grados (50% de probabilidad)
+	A.VerticalFlip(p=0.5),
+	A.Transpose(p=0.3),
+	A.RandomResizedCrop(size=(128,128),scale=(0.7,1.0), p=1.0),
+    A.ShiftScaleRotate(shift_limit=0.02, scale_limit=0.05, rotate_limit=15, p=0.3, border_mode = cv2.BORDER_CONSTANT), # Desplaza, hace zoom o gira la imagen con probabilidad 0.3
 ])
 
+# 2. Función para cargar y preparar cada imagen
 def procesar_imagen_completo(fila_maestro, entrenando=False):
+    # Control de seguridad: nos aseguramos de que el registro del paciente existe
     if fila_maestro is None:
         raise ValueError("fila_maestro es None")
     
+    # Verificamos que la ruta de la imagen esté presente en el catálogo maestro
     if 'ruta_imagen' not in fila_maestro:
         raise KeyError(f"fila_maestro no tiene 'ruta_imagen': {fila_maestro}")
-    # Cargamos la imagen original (3 canales: Pre, FLAIR, Post)
+
+    # CARGA DE IMAGEN: Leemos la resonancia RM con sus 3 canales (Pre, FLAIR, Post)
+    # Usamos IMREAD_UNCHANGED para mantener la profundidad de bits original
     img = cv2.imread(fila_maestro['ruta_imagen'], cv2.IMREAD_UNCHANGED).astype(np.float32)
-    # Cargamos la máscara en escala de grises
+
+    # CARGA DE MÁSCARA: 
     if fila_maestro['ruta_mascara'] is not None:
+        # La cargamos en escala de grises (blanco para tumor, negro para fondo)
         mask = cv2.imread(fila_maestro['ruta_mascara'], cv2.IMREAD_GRAYSCALE).astype(np.float32)
     else:
-        # Crear una máscara vacía del mismo tamaño que la imagen
+        # Si el paciente no tiene máscara, creamos un lienzo negro del mismo tamaño mg.shape[:2]= 256x256
         mask = np.zeros(img.shape[:2], dtype=np.float32)
-    
+
+
     # RECORTE AUTOMÁTICO
     # Buscamos todos los píxeles que no sean negros (valor > 0) en cualquier canal
     puntos_cerebro = np.argwhere(img.max(axis=2) > 0) #Busca en la matriz ancho x alto x 3 canales los pixeles que no son 0 en los tres canales
@@ -50,6 +60,8 @@ def procesar_imagen_completo(fila_maestro, entrenando=False):
         img = img[y_min:y_max+1, x_min:x_max+1] #Recortamos el cuadrado de la imagen (le sumamos 1 porque empieza por 0)
         mask = mask[y_min:y_max+1, x_min:x_max+1] #Igual en la máscara
 
+
+
     # AUMENTO DE DATOS (DATA AUGMENTATION)
     if entrenando:
         # Convertimos la máscara a binaria (0 o 1) antes de transformar
@@ -60,22 +72,21 @@ def procesar_imagen_completo(fila_maestro, entrenando=False):
 
     # REDIMENSIONADO FINAL
     # Como el recorte cambia el tamaño, redimensionamos a un estándar (ej. 256x256) para el modelo
-    img = cv2.resize(img, (128, 128)) #La interpolation por defecto INTER_LINEAR que nos mantiene una imágen suave
-    mask = cv2.resize(mask, (128, 128), interpolation=cv2.INTER_NEAREST) #INTER_NEAREST nos evita que la mascara se difumine
+    img = cv2.resize(img, (128, 128)) 
+    mask = cv2.resize(mask, (128, 128), interpolation=cv2.INTER_NEAREST) #INTER_NEAREST para que la mascara se difumine
 
     # NORMALIZACIÓN Z-SCORE POR CANAL 
-    #Normalizamos para que luego los podamos tratar a todos por igual y que la media y varianza no nos alteren
-    #for i in range(3): # Iteramos por los 3 canales (0, 1 y 2)
-    #    canal = img[:, :, i]
-    #    pixeles_validos = canal[canal > 0] # Seleccionamos solo píxeles del cerebro
-    #    
-    #    if pixeles_validos.size > 0:
-    #        media = pixeles_validos.mean() # Calculamos el promedio del canal
-    #        std = pixeles_validos.std()   # Calculamos la desviación estándar
-    #        # Aplicamos la fórmula: (valor - media) / desviación
-    #        img[:, :, i] = (canal - media) / (std + 1e-8)
-    #        # Nos aseguramos que el fondo recortado siga siendo 0 absoluto
-    #        img[canal == 0, i] = 0
-
+    for i in range(3): # Iteramos por los 3 canales (0, 1 y 2)
+        canal = img[:, :, i]
+        pixeles_validos = canal[canal > 0] # Seleccionamos solo píxeles del cerebro
+        
+        if pixeles_validos.size > 0:
+            media = pixeles_validos.mean() # Calculamos el promedio del canal
+            std = pixeles_validos.std()   # Calculamos la desviación estándar
+            # Aplicamos la fórmula: (valor - media) / desviación
+            img[:, :, i] = (canal - media) / (std + 1e-8)
+            # Nos aseguramos que el fondo recortado siga siendo 0 absoluto
+            img[canal == 0, i] = 0
 
     return img, mask
+
