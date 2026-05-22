@@ -18,3 +18,10 @@ env/
 kaggle.json
 .kaggle/
 .tmp*/
+DATOS/
+datos_procesados/
+*.pth
+*.pkl
+*.npy
+*.tif
+*.tiff
