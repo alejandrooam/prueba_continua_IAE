@@ -34,6 +34,9 @@ src_path = Path(__file__).parent.parent
 # Inserta src_path al inicio de sys.path para que Python busque modulos alli
 sys.path.insert(0, str(src_path))
 
+RAIZ_PROYECTO = Path(__file__).parent.parent.parent
+DATOS_PROCESADOS = RAIZ_PROYECTO / "datos_procesados"
+
 # =============================================================================
 # IMPORTACION DE MODULOS PROPIOS DEL PROYECTO
 # =============================================================================
@@ -54,15 +57,59 @@ class DagsterClient:
     gestionando los datos temporales de cada sesion de paciente.
     """
     
-    def __init__(self, base_url: str = "http://localhost:3000"):
+    def __init__(self):
         """
         Inicializa el cliente con la URL base del orquestador Dagster.
         
         Args:
             base_url: URL donde corre el servidor de Dagster (puerto 3000 por defecto)
         """
-        self.base_url = base_url
+        self.model = None
+        self.device = None
+        self.umbral = None
+        self.modelo_urgencia = None
+
+        # Cargar modelos al iniciar
+        self._cargar_modelos()
     
+
+    def _cargar_modelos(self):
+        """Carga los modelos entrenados desde datos_procesados/"""
+        try:
+            # Ruta a la raíz del proyecto
+            PROJECT_ROOT = Path(__file__).parent.parent.parent
+            DATOS_PROCESADOS = PROJECT_ROOT / "datos_procesados"
+            
+            # Cargar modelo FPN
+            modelo_fpn_path = DATOS_PROCESADOS / "modelo_fpn_mejor.pth"
+            if modelo_fpn_path.exists():
+                self.model = FPN()
+                self.model.load_state_dict(torch.load(modelo_fpn_path, map_location='cpu'))
+                self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                self.model.to(self.device)
+                self.model.eval()
+            else:
+                st.error(f"Modelo FPN no encontrado en {modelo_fpn_path}")
+            
+            # Cargar umbral
+            umbral_path = DATOS_PROCESADOS / "umbral.npy"
+            if umbral_path.exists():
+                self.umbral = np.load(umbral_path)
+            else:
+                self.umbral = 0.5
+            
+            # Cargar modelo de urgencia
+            modelo_urgencia_path = DATOS_PROCESADOS / "modelo_urgencia" / "modelo_urgencia.pkl"
+            if modelo_urgencia_path.exists():
+                data = joblib.load(modelo_urgencia_path)
+                self.modelo_urgencia = data['modelo']
+            else:
+                st.warning(f"Modelo urgencia no encontrado en {modelo_urgencia_path}")
+                
+        except Exception as e:
+            st.error(f"Error al cargar modelos: {str(e)}")
+
+
     def inicializar_sesion(self, session_id: str) -> str:
         """
         Inicializa una nueva sesion y crea el directorio temporal.
@@ -105,13 +152,6 @@ class DagsterClient:
         1. Preprocesado (recorte y normalizacion)
         2. Segmentacion del tumor con FPN
         3. Extraccion de biomarcadores
-        
-        Args:
-            imagen_tif_bytes: Imagen de resonancia en formato TIF como bytes
-            datos_clinicos: Datos del paciente (no se usan directamente, se pasan por compatibilidad)
-        
-        Returns:
-            Tupla con (mascara_binaria, DataFrame de caracteristicas)
         """
         # PASO 1: Guardar la imagen temporalmente
         temp_dir = Path(tempfile.gettempdir()) / "mrai_temp"
@@ -127,33 +167,23 @@ class DagsterClient:
             'ruta_mascara': None
         }
         img_procesada, _ = procesar_imagen_completo(fila_maestro, entrenando=False)
-        # img_procesada es (H, W, 3) con canales: [FLAIR, pre, post]
         
         # PASO 3: Guardar imagen procesada temporalmente para el modelo
         temp_npy_path = temp_dir / f"img_procesada_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.npy"
         np.save(temp_npy_path, img_procesada)
         
-        # PASO 4: Cargar modelo de segmentacion FPN entrenado
-        DATOS_PROCESADOS = src_path.parent / "datos_procesados"
-        model = FPN()
-        modelo_fpn_entrenado = DATOS_PROCESADOS / "modelo_fpn_mejor.pth"
-        model.load_state_dict(torch.load(modelo_fpn_entrenado, map_location='cpu'))
+        # PASO 4: USAR EL MODELO YA CARGADO (no crear uno nuevo)
+        # model = FPN()  ← ELIMINA ESTO
+        # modelo_fpn_entrenado = DATOS_PROCESADOS / "modelo_fpn_mejor.pth"  ← ELIMINA ESTO
+        # model.load_state_dict(...)  ← ELIMINA ESTO
         
-        # Seleccionar dispositivo: GPU si esta disponible, sino CPU
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model.to(device)  # Mover el modelo al dispositivo elegido
-        
-        # Cargar umbral optimo para binarizar la mascara
-        umbral = np.load(DATOS_PROCESADOS / "umbral.npy")
-        
-        # PASO 5: Segmentar la imagen (obtener mascara)
+        # PASO 5: Segmentar usando self.model (ya cargado en __init__)
         mascara_prob, mascara_binaria = segmentar_imagen(
-            model=model,
+            model=self.model,           # ← CAMBIA model=model por model=self.model
             imagen_npy_path=str(temp_npy_path),
-            device=device,
-            umbral=umbral
+            device=self.device,         # ← usa self.device
+            umbral=self.umbral          # ← usa self.umbral
         )
-
         
         # PASO 6: Extraer caracteristicas radiomicas de la mascara
         caracteristicas = self.extraer_caracteristicas_completas(img_procesada, mascara_binaria)
@@ -250,35 +280,26 @@ class DagsterClient:
         Predice el nivel de urgencia clinica combinando:
         - Caracteristicas radiomicas del tumor (7 variables)
         - Datos clinicos del paciente (edad y grado tumoral)
-        
-        Args:
-            caracteristicas_df: DataFrame con las 7 caracteristicas tumorales
-            datos_clinicos: Diccionario con edad y grado histologico
-        
-        Returns:
-            Probabilidad de urgencia (valor entre 0 y 1)
         """
-
         # Verificar si hay tumor (area > 0)
         if 'area' in caracteristicas_df.columns:
             area = caracteristicas_df['area'].iloc[0]
         if area == 0 or pd.isna(area):
             return 0.0  # Sin tumor = sin urgencia
         
-        # PASO 1: Cargar el modelo de urgencia entrenado
-        DATOS_PROCESADOS = src_path.parent / "datos_procesados"
-        modelo_path = DATOS_PROCESADOS / "modelo_urgencia" / "modelo_urgencia.pkl"
+        # PASO 1: USAR EL MODELO YA CARGADO (no recargar)
+        # ELIMINA estas 3 líneas:
+        # modelo_path = DATOS_PROCESADOS / "modelo_urgencia" / "modelo_urgencia.pkl"
+        # data = joblib.load(modelo_path)
+        # modelo = data['modelo']
         
-        if not modelo_path.exists():
-            raise FileNotFoundError(f"Modelo de urgencia no encontrado en {modelo_path}")
-        
-        data = joblib.load(modelo_path)
-        modelo = data['modelo']  # Extraer modelo de regresion logistica
+        # En su lugar, usa self.modelo_urgencia directamente:
+        if self.modelo_urgencia is None:
+            return 0.5  # valor por defecto si no hay modelo
         
         # PASO 2: Preparar diccionario con todas las caracteristicas
         features_dict = {}
         
-        # Caracteristicas del tumor (7 variables)
         features_dict['area'] = caracteristicas_df['area'].iloc[0]
         features_dict['perimetro'] = caracteristicas_df['perimetro'].iloc[0]
         features_dict['circularidad'] = caracteristicas_df['circularidad'].iloc[0]
@@ -286,11 +307,8 @@ class DagsterClient:
         features_dict['intensidad_minima_post'] = caracteristicas_df['intensidad_minima_post'].iloc[0]
         features_dict['percentil_95_flair'] = caracteristicas_df['percentil_95_flair'].iloc[0]
         features_dict['textura_contraste'] = caracteristicas_df['textura_contraste'].iloc[0]
-        
-        # Variables clinicas: edad (con valor por defecto 55)
         features_dict['age_at_initial_pathologic'] = datos_clinicos.get('age_at_initial_pathologic', 55) or 55
         
-        # Convertir grado histologico (texto) a valor numerico (1-4)
         grado = datos_clinicos.get('neoplasm_histologic_grade')
         if grado == "Grado IV" or grado == "IV":
             features_dict['neoplasm_histologic_grade'] = 4
@@ -301,9 +319,8 @@ class DagsterClient:
         elif grado == "Grado I" or grado == "I":
             features_dict['neoplasm_histologic_grade'] = 1
         else:
-            features_dict['neoplasm_histologic_grade'] = 2  # Valor por defecto: Grado II
+            features_dict['neoplasm_histologic_grade'] = 2
         
-        # PASO 3: Ordenar columnas (mismo orden que en entrenamiento)
         columnas_ordenadas = [
             'area', 'perimetro', 'circularidad', 
             'intensidad_media_post', 'intensidad_minima_post', 
@@ -313,9 +330,8 @@ class DagsterClient:
         
         features_completas = pd.DataFrame([features_dict])[columnas_ordenadas]
         
-        # PASO 4: Predecir probabilidad de urgencia
-        # predict_proba devuelve [prob_clase_0, prob_clase_1]
-        urgencia = modelo.predict_proba(features_completas)[0, 1]
+        # PASO 3: Predecir usando self.modelo_urgencia (no modelo)
+        urgencia = self.modelo_urgencia.predict_proba(features_completas)[0, 1]
         
         return float(urgencia)
     
@@ -465,4 +481,4 @@ def get_dagster_client():
     Returns:
         Instancia unica de DagsterClient (patron singleton)
     """
-    return DagsterClient(base_url="http://localhost:3000")
+    return DagsterClient()
