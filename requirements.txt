@@ -1,0 +1,12 @@
+streamlit
+pandas
+numpy
+plotly
+pillow
+opencv-python-headless
+scikit-image
+scikit-learn
+joblib
+torch
+torchvision
+albumentations
