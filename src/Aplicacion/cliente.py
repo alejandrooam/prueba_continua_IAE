@@ -42,8 +42,8 @@ DATOS_PROCESADOS = RAIZ_PROYECTO / "datos_procesados"
 # =============================================================================
 
 from transformar_datos import procesar_imagen_completo  # Preprocesamiento de resonancias
-from src.procesamiento_datos.modelo.segmentar import segmentar_imagen  # Inferencia del modelo
-from src.procesamiento_datos.modelo.modelo_fpn import DobleConv, FPN  # Arquitectura FPN
+from procesamiento_datos.modelo.segmentar import segmentar_imagen  # Inferencia del modelo
+from procesamiento_datos.modelo.modelo_fpn import DobleConv, FPN  # Arquitectura FPN
 
 
 # =============================================================================
