@@ -9,4 +9,3 @@ scikit-learn
 joblib
 torch
 torchvision
-requests
