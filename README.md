@@ -55,7 +55,7 @@ La aplicación incluye un formulario médico donde se pueden ingresar datos clí
 1. Clonar el repositorio:
 
 git clone https://github.com/alejandrooam/brain-tumor-segmentation-fpn-app.git
-cd brain-tumor-segmentation-unet-app
+cd brain-tumor-segmentation-fpn-app
 
 2. Instalar uv:
 
