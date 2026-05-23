@@ -8,7 +8,6 @@
 # LIBRERÍAS NECESARIAS:
 import torch              # Librería principal de deep learning: tensores, autograd, GPU
 import torch.nn as nn     # Módulo de redes neuronales: capas (Conv2d, ReLU, Sequential, etc.)
-import dagster as dg      # Orquestación de pipelines de datos
 
 # ============================================================
 # BLOQUE DE DOBLE CONVOLUCIÓN (PARTE CONTRACTIVA DEL CODIFICADOR)
